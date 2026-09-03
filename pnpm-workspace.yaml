@@ -1,0 +1,4 @@
+# pnpm 11 起，包级设置从 package.json 的 pnpm 字段迁至本文件（单包仓也用它承载设置）。
+# 放行 esbuild 的 postinstall（下载平台二进制——tsup/vitest 的转译底座必需）。
+allowBuilds:
+  esbuild: true

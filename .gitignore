@@ -1,0 +1,13 @@
+# 依赖与构建产物
+node_modules/
+dist/
+*.tsbuildinfo
+
+# 测试与基准临时产物
+.bench/
+coverage/
+
+# 编辑器与系统杂项
+.idea/
+.vscode/
+.DS_Store
