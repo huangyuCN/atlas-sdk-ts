@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "description": "Atlas 多语言客户端 SDK 的 TypeScript 实现：帧协议编解码 + 运行时内核 + 通道传输（浏览器与 Node 双目标）",
   "type": "module",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "engines": {
     "node": ">=22"
   },
@@ -24,6 +24,7 @@
     "build": "tsup",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "bench": "vitest bench",
     "check": "tsc --noEmit && vitest run"
   },
   "devDependencies": {
