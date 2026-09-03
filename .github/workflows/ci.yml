@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        node: ['20', '22', '24']
+        node: ['22', '24']
     steps:
       - uses: actions/checkout@v4
       # golden 向量源仓（规范 §8.1：四语言消费同一份向量；pin 到固定 commit，

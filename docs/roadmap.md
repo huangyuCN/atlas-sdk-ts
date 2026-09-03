@@ -11,7 +11,8 @@
 
 - **立项交付**：
   - 仓骨架：pnpm + tsup（ESM + CJS + d.ts 三形态，`target ES2020`）+ vitest +
-    tsc strict（`noUncheckedIndexedAccess`）；`engines.node >= 20`；
+    tsc strict（`noUncheckedIndexedAccess`）；`engines.node >= 22`（Node 20 已于
+    2026-04 结束维护期，pnpm 11 亦要求 ≥22.13）；
     浏览器与 Node 双目标约定：**协议层/内核零平台依赖**（仅 JS 语言标准能力），
     平台差异收敛在传输层。
   - **协议层帧编解码（`src/frame/`）全量交付并 golden 对齐全绿（74 测试，含 21 用例
