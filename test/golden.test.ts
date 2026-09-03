@@ -1,5 +1,6 @@
 // golden vectors 对齐测试（规范 §8.1：四语言跑同一组字节用例，防漂移根基）。
-// 向量源：atlas-sdk-go/testdata/golden（21 用例，manifest 锁定 atlas 基线 commit）。
+// 向量源：atlas 主仓 testdata/golden（manifest 锁定 atlas 基线 commit；用例数
+// 以 manifest 为准，逐用例自动消费，新增用例无需改本文件）。
 // 对拍口径与 atlas-sdk-go/frame/golden_assert_test.go 完全同构：
 //   frame  用例走流式读语义（readFrameFrom：incomplete → network、校验失败 → protocol）；
 //   reply  用例直读完整包络字节（decodeReply）；
@@ -22,9 +23,9 @@ import {
 
 const golden = loadGolden();
 
-describe('golden vectors 对齐（与 atlas-sdk-go 同源同份）', () => {
-  it('向量包完整：21 用例且 manifest 双 sha256 全部校验通过', () => {
-    expect(golden.cases.length).toBeGreaterThanOrEqual(21);
+describe('golden vectors 对齐（与 atlas 主仓同源同份，四语言同一向量）', () => {
+  it('向量包完整：用例数 ≥ 21 且 manifest 双 sha256 全部校验通过', () => {
+    expect(golden.cases.length).toBeGreaterThanOrEqual(21); // 新增用例以 manifest 为准动态消费
     expect(golden.manifest.protocolVersion).toBe(1);
     expect(golden.manifest.atlasCommit).toMatch(/^[0-9a-f]{40}$/);
   });

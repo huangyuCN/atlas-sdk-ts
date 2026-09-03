@@ -7,14 +7,15 @@ import { fileURLToPath } from 'node:url';
 import { expect } from 'vitest';
 import { ProtocolError, type Status } from '../src/frame/index.js';
 
-/** golden 向量目录：默认 ../atlas-sdk-go/testdata/golden（与本仓同级的 Go SDK 仓——
- * 规范 §8.1 四语言消费同一份向量；manifest 锁定 atlas 基线 commit）。
+/** golden 向量目录：默认 ../atlas/testdata/golden（与本仓同级的 atlas 主仓——
+ * 规范 §3.2/§8.1 协议单点：规范与向量同仓，四语言消费同一份向量；
+ * manifest 锁定 atlas 基线 commit）。
  * 可用环境变量 ATLAS_GOLDEN_DIR 覆盖（CI 中由 checkout 位置决定）。 */
 export function goldenDir(): string {
   const env = process.env['ATLAS_GOLDEN_DIR'];
   if (env) return env;
   const here = fileURLToPath(new URL('.', import.meta.url)); // 本仓 test/ 目录
-  return resolve(here, '../../atlas-sdk-go/testdata/golden');
+  return resolve(here, '../../atlas/testdata/golden');
 }
 
 /** manifest 逐用例元数据（kind / max_body_size / 双 sha256）。 */

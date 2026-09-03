@@ -13,13 +13,14 @@ jobs:
         node: ['22', '24']
     steps:
       - uses: actions/checkout@v4
-      # golden 向量源仓（规范 §8.1：四语言消费同一份向量；pin 到固定 commit，
-      # 向量更新时同步推进——完整机器人自动化为规范 P5）。
+      # golden 向量源仓 = atlas 主仓（协议单点：规范与向量同仓，transport/frame 生成）。
+      # ref 跟随 feat/actor 分支；向量内容由 manifest 逐文件 sha256 校验兜底，
+      # 协议基线以 manifest.atlasCommit 记录（完整 pin/机器人自动化为规范 P5）。
       - uses: actions/checkout@v4
         with:
-          repository: huangyuCN/atlas-sdk-go
-          ref: d212872175cecc27c16d98f1f54ca0432f843932
-          path: vector-source/atlas-sdk-go
+          repository: huangyuCN/atlas
+          ref: feat/actor
+          path: atlas
       - uses: pnpm/action-setup@v4
         with:
           version: 11
@@ -31,6 +32,6 @@ jobs:
       - name: 类型检查 + 单测 + golden 对齐
         run: pnpm check
         env:
-          ATLAS_GOLDEN_DIR: ${{ github.workspace }}/vector-source/atlas-sdk-go/testdata/golden
+          ATLAS_GOLDEN_DIR: ${{ github.workspace }}/atlas/testdata/golden
       - name: 构建（ESM + CJS + d.ts 三形态）
         run: pnpm build
