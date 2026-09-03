@@ -8,9 +8,9 @@ Atlas 帧协议的 TypeScript 客户端 SDK。浏览器与 Node 双目标（产�
 ESM / CJS / d.ts 三种形态），面向游戏客户端、机器人与工具脚本连接
 [Atlas](https://github.com/huangyuCN/atlas) 游戏服务端。
 
-> **当前状态**：协议层（帧编解码、响应包络、错误还原）已可用并锁定字节级协议用例；
-> 运行时内核（请求匹配、推送订阅、心跳、重连）与通道传输（WebSocket / TCP / UDP）
-> 正在开发中，见 [roadmap](docs/roadmap.md)。
+> **当前状态**：协议层 + 运行时内核（请求匹配、推送订阅、双层心跳、断线重连、
+> dual 双通道编排）已可用；通道传输（WebSocket / TCP / UDP 真实连接）开发中，
+> 见 [roadmap](docs/roadmap.md)。
 
 ## 特性
 
@@ -26,8 +26,8 @@ ESM / CJS / d.ts 三种形态），面向游戏客户端、机器人与工具脚
 - **零宿主依赖**：协议层只用 JS 语言标准能力——UTF-8 编解码自带实现
   （不依赖 `TextEncoder`/`TextDecoder`），产物 target 为 ES2020。浏览器、Node、
   Cocos Creator 等嵌入式 JS 引擎（原生 JSB 环境）均可直接使用。
-- **协议一致性**：与 Go SDK 消费同一份 21 用例字节级 golden vectors，CI 逐用例
-  对拍，行为跨语言一致。
+- **协议一致性**：与 Go SDK 消费同一份 22 用例字节级 golden vectors（向量源在
+  atlas 主仓，规范与向量同仓），CI 逐用例对拍，行为跨语言一致。
 
 ## 环境要求
 
@@ -136,16 +136,19 @@ atlas sdk gen --lang ts --protoset <protoc --descriptor_set_out 产物> --out dt
 
 ```bash
 pnpm install    # 安装依赖（pnpm ≥ 10）
-pnpm test       # 单测 + golden vectors 对拍（21 用例，与 Go SDK 同一份向量）
+pnpm test       # 单测 + golden vectors 对拍（22 用例，与 Go SDK 同一份向量）
 pnpm typecheck  # tsc --noEmit（strict）
 pnpm build      # tsup → dist/（ESM + CJS + d.ts）
 pnpm bench      # 协议层 benchmark
 ```
 
+> golden vectors 向量包在 atlas 主仓 `testdata/golden/`。本地测试默认读取与本仓
+> 同级的 `../atlas/testdata/golden`，或用环境变量 `ATLAS_GOLDEN_DIR` 指定。
+
 ## 路线图
 
 - [x] v0.1：协议层帧编解码 + golden 对齐 + 引擎宿主兼容加固
-- [ ] v0.2：运行时内核（Invoke 请求匹配、Notify 订阅、双层心跳、指数退避重连）
+- [x] v0.2：运行时内核（Invoke 请求匹配、Notify 订阅、双层心跳、重连与 dual 编排）
 - [ ] v0.3：通道传输（浏览器 WebSocket → Node TCP/UDP）
 - [ ] v0.4：真服务端到端验收（注册/登录/匹配/战斗/结算闭环）
 

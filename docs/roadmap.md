@@ -3,11 +3,44 @@
 > 协议规范（唯一事实源，只读参考）：atlas 主仓
 > `docs/superpowers/specs/2026-08-28-client-sdk-multilang-design.md`。
 > 服务端对接基准：atlas `feat/actor` 分支顶点 `40d8e74`（2026-09-01，当前与 main 同顶点；
-> golden manifest `atlasCommit` 字段锁定）。golden 向量源：atlas-sdk-go 仓
-> `testdata/golden/`（21 用例，四语言同一份；本仓 CI pin 该仓 commit `d212872`，
-> 向量更新时同步推进）。
+> golden manifest `atlasCommit` 字段锁定）。golden 向量源：atlas 主仓 `testdata/golden/`
+> （协议单点：规范与向量同仓，transport/frame -update 生成；本仓 CI 检出 atlas
+> `feat/actor` 注入 `ATLAS_GOLDEN_DIR`，用例数以 manifest 为准动态消费，新增用例无需改本仓）。
 
-## 当前状态（2026-09-01，v0.1 立项 + 协议层交付 + 引擎宿主兼容加固）
+## 当前状态（2026-09-03，v0.2 运行时内核完成）
+
+- **v0.2 交付**（`src/client/`，测试全绿（数量以 CI 为准），语义与 atlas-sdk-go/client 逐条同源）：
+  - **错误四分类**：`AtlasError` 抽象基类（cause 手动赋值）+ `BusinessError`/
+    `NetworkError`/`TimeoutError`/`ProtocolError`；`isBusinessError(err, reason)`
+    按 Reason 精确匹配；内核 ProtocolError 在读循环边界包装协议层哨兵（cause 链），
+    两层分类哨兵独立成立（依赖方向不反转）。
+  - **Invoke**：`(epoch, seq)` in-flight 匹配（seq 跨重连不重置）、恰一次结算
+    （超时先到响应静默丢弃）、per-call `WithRequestTimeout`/`WithFailFast`、
+    序列化插槽（默认 JSON，序列化失败归协议错误）。
+  - **Notify 订阅**：多路订阅、同 handler 幂等去重、退订句柄幂等、handler 异常
+    隔离（同步/异步双路径），订阅生命周期归通道（重连自动生效）。
+  - **重连 supervisor**：首连失败拒绝构造（对齐 Dial 语义）；重连退避（±20% 抖动）
+    + 钩子同步执行（hookBypass 直通窗口、上限 hookTimeout、超时弃用本代）+
+    settle 后 drain 排队（FIFO：排队严格先于新请求，drain 期间新请求继续入队）；
+    网络断连立即置 Reconnecting（无「连接已死仍 Connected」窗口）；协议级致命
+    终止不重连。
+  - **双层心跳**：传输心跳业务拒绝不计死链、网络失败连续 3 次判死链按代关闭；
+    会话心跳仅业务通道门控、业务错误 CAS 单飞触发重登、工厂未就绪跳过、
+    网络错误静默。
+  - **dual 编排**：`newDualClient` 业务+战斗通道独立心跳/重连/排队/钩子；
+    链式重绑（业务重登成功 → 战斗 Join 重绑，战斗未就绪跳过本轮）；链式钩子
+    追加在业务通道配置自身（战斗 Opts 永不外溢）；`Client.State()` 聚合向下降级
+    （connected < connecting/reconnecting < disconnected）；`ChannelView` 视图
+    （生命周期归 Client）。
+  - **优雅关闭**：幂等 Close，in-flight 与排队请求统一 `NetworkError`。
+  - 实现修复记录：结算入口统一走 `settleInflight`（修复双重删除导致 resolve
+    永不执行）；首连与重连场景分离（首连不执行钩子/不退避）。
+  - 文件结构：`channel.ts`（连接本体 436 行）/`readloop.ts`（读循环与帧分发）/
+    `reconnect.ts`（supervisor）/`heartbeat.ts`（双层心跳）/`notify.ts`（订阅表）/
+    `client.ts`（编排器）/`errors.ts`/`options.ts`/`serializer.ts`/`transport.ts`
+    （接口 + 内存 mock）。
+
+## 前序状态（2026-09-01，v0.1 立项 + 协议层交付 + 引擎宿主兼容加固）
 
 - **立项交付**：
   - 仓骨架：pnpm + tsup（ESM + CJS + d.ts 三形态，`target ES2020`）+ vitest +
@@ -38,24 +71,7 @@
   - benchmark 基线（微秒级，无退化）：encodeFrame ~0.24µs/op、decodeFrame ~0.11µs/op、
     decodeReply ~1.1µs/op、decodeStatus ~4.5µs/op。
 
-## v0.2：运行时内核（下一批次）
-
-按规范 §5 逐条实现（语义与 atlas-sdk-go/client 同源，TS idiom 表达）：
-
-- **Invoke**：`(epoch, seq)` 匹配（Promise + AbortSignal）、per-call timeout/failFast、
-  超时与响应竞态语义（恰一次结算，§5.2）；
-- **Notify 订阅**：`On(op, handler)` 多路订阅 + 退订句柄 + 幂等去重 + 重连后自动重放
-  （服务端客户端引擎是单 handler 替换式，多路订阅是 SDK 增量价值，§0）；
-- **双层心跳**：传输 Ping（业务拒绝不计死链、连续 N 次判死链、按代精确匹配）+
-  会话心跳（仅业务通道 kind 门控、CAS 单飞触发重登，§5.2）；
-- **指数退避重连**：base 500ms ×2 上限 30s 带抖动；seq 跨重连不重置；请求排队
-  （上限可配、failFast 直通）；重连钩子同步执行 + hookBypass 直通窗口
-  （窗口上限 = hookTimeout、外部并发 Invoke 同样直通，§5.2）；
-- **dual 双通道编排**：`Channel(kind)` 视图、`Client.State()` 聚合向下降级
-  （劣化序 Connected < Reconnecting < Disconnected）、业务重登成功 → 战斗 Join
-  链式重绑、每通道独立心跳/重连/排队/钩子；
-- **错误四分类**：BusinessError/NetworkError/TimeoutError/ProtocolError
-  （`AtlasError` 抽象基类 + `cause` 链路，§7）。
+## v0.2：运行时内核（已完成，见顶部状态）
 
 ## v0.3：通道传输（浏览器 WS 优先 → Node TCP/UDP）
 
