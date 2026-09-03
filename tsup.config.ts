@@ -7,7 +7,7 @@ import { defineConfig } from 'tsup';
 // 协议层与内核不依赖 node 内置模块（纯 Uint8Array/DataView 等语言能力），
 // 同一份产物同时服务浏览器与 Node 两个目标。
 export default defineConfig({
-  entry: ['src/index.ts'],
+  entry: ['src/index.ts', 'src/node.ts'],
   format: ['esm', 'cjs'],
   dts: true,
   target: 'es2020',

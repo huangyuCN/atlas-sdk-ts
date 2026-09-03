@@ -8,9 +8,9 @@ Atlas 帧协议的 TypeScript 客户端 SDK。浏览器与 Node 双目标（产�
 ESM / CJS / d.ts 三种形态），面向游戏客户端、机器人与工具脚本连接
 [Atlas](https://github.com/huangyuCN/atlas) 游戏服务端。
 
-> **当前状态**：协议层 + 运行时内核（请求匹配、推送订阅、双层心跳、断线重连、
-> dual 双通道编排）已可用；通道传输（WebSocket / TCP / UDP 真实连接）开发中，
-> 见 [roadmap](docs/roadmap.md)。
+> **当前状态**：协议层、运行时内核（请求匹配、推送订阅、双层心跳、断线重连、
+> dual 双通道编排）与通道传输（浏览器/Cocos WebSocket、Node TCP/UDP）均可用；
+> 真网关端到端验收进行中，见 [roadmap](docs/roadmap.md)。
 
 ## 特性
 
@@ -110,12 +110,12 @@ socket.on('data', (chunk: Uint8Array) => {
 
 ## 兼容性
 
-| 运行环境 | 协议层 | 通道传输（开发中） |
-|---------|--------|------------------|
-| 浏览器（现代 ES2020 引擎） | ✅ | WebSocket |
-| Node.js ≥ 22 | ✅ | WebSocket / TCP / UDP |
-| Cocos Creator（Web 构建） | ✅ | WebSocket |
-| Cocos Creator（原生 JSB） | ✅ | WebSocket（引擎 JSB 绑定） |
+| 运行环境 | 协议层 | 内核 | 通道传输 |
+|---------|--------|------|---------|
+| 浏览器（现代 ES2020 引擎） | ✅ | ✅ | WebSocket |
+| Node.js ≥ 22 | ✅ | ✅ | WebSocket / TCP / UDP |
+| Cocos Creator（Web 构建） | ✅ | ✅ | WebSocket |
+| Cocos Creator（原生 JSB） | ✅ | ✅ | WebSocket（引擎 JSB 绑定） |
 
 说明：嵌入式 JS 引擎宿主不保证提供 `TextEncoder`/`TextDecoder`（它们是宿主 API
 而非语言标准），本 SDK 的 UTF-8 编解码为自带实现，因此协议层在任何 ES2020 环境
@@ -149,7 +149,7 @@ pnpm bench      # 协议层 benchmark
 
 - [x] v0.1：协议层帧编解码 + golden 对齐 + 引擎宿主兼容加固
 - [x] v0.2：运行时内核（Invoke 请求匹配、Notify 订阅、双层心跳、重连与 dual 编排）
-- [ ] v0.3：通道传输（浏览器 WebSocket → Node TCP/UDP）
+- [x] v0.3：通道传输（WebSocket 全平台 / Node TCP、UDP）
 - [ ] v0.4：真服务端到端验收（注册/登录/匹配/战斗/结算闭环）
 
 ## License

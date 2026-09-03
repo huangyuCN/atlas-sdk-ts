@@ -47,3 +47,6 @@ export {
 } from './client/transport.js';
 export { HeartbeatOperation, HEARTBEAT_FAILURES } from './client/channel.js';
 export type { NotifyHandler } from './client/notify.js';
+export type { WebSocketLike, WebSocketFactory } from './transport/ws.js';
+export { connectWebSocketTransport, dialWebSocket, wsDialer } from './transport/ws.js';
+export { newWSClient } from './client/wsclient.js';

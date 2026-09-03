@@ -210,7 +210,11 @@ export class Channel {
           this.settings.maxBodySize,
         ),
       ).catch((err) => {
-        this.settleInflight(key, { kind: 'error', error: new NetworkError('发送失败', err) });
+        // 评审缺陷修复：encodeFrame 抛的本地协议错误（如 body 超限——配置问题）
+        // 不得误分类为 NetworkError（否则触发无意义重连）；保留其 ProtocolError
+        // 身份，其余错误包 NetworkError。
+        const e = err instanceof ProtocolError ? err : new NetworkError('发送失败', err);
+        this.settleInflight(key, { kind: 'error', error: e });
       });
     });
     if (outcome.kind === 'status') {

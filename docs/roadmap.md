@@ -7,7 +7,28 @@
 > （协议单点：规范与向量同仓，transport/frame -update 生成；本仓 CI 检出 atlas
 > `feat/actor` 注入 `ATLAS_GOLDEN_DIR`，用例数以 manifest 为准动态消费，新增用例无需改本仓）。
 
-## 当前状态（2026-09-03，v0.2 运行时内核完成）
+## 当前状态（2026-09-03，v0.3 通道传输完成）
+
+- **v0.3 交付**（16 个通道用例，总计 130 测试全绿）：
+  - **WebSocket 通道**（主入口，零平台依赖）：`WebSocketLike` 最小公约接口
+    （on* 事件 + send/close）桥接浏览器原生 WS 与 Cocos JSB WS，一条消息 = 一个
+    完整帧；`connectWebSocketTransport`（open 等待/超时）+ `dialWebSocket`
+    （ws://wss:// URL 或 host:port+path，默认 /ws）；文本消息/帧非法 → 协议错误
+    终止；`newWSClient(url, opts, wsFactory?)` 便捷构造。
+  - **Node TCP 通道**（`@huangyucn/atlas-sdk-ts/node` 子入口）：node:net +
+    累积缓冲游标 + `readFrameFrom` 切帧（data 事件只累积与唤醒，maxBodySize
+    语义在读取时校验不旁路）；粘包/半包实测；帧协议非法 → ProtocolError
+    （内核终止不重连）；`newTCPClient`。
+  - **Node UDP 通道**（同子入口）：node:dgram 面向连接（对齐 Go DialUDP）；
+    一报一帧；写侧 64KiB（含帧头）提前拦截；坏数据报静默丢弃（软跳过）；
+    `newUDPClient`。
+  - **构建**：tsup 多入口（`index` 零平台依赖 + `node` 含 node:net/dgram），
+    package.json `exports["./node"]` 子入口；主入口产物经特征串核查零
+    node: 引用（浏览器/嵌入式宿主安全承诺兑现）。
+  - 测试形态：WS 用 mock WebSocket 工厂（on* 事件手控）；TCP/UDP 用 node
+    真实回环 socket（本地回环无外部依赖，CI 可跑）；真网关集成冒烟属 v0.4。
+
+## 前序状态（2026-09-03，v0.2 运行时内核完成）
 
 - **v0.2 交付**（`src/client/`，测试全绿（数量以 CI 为准），语义与 atlas-sdk-go/client 逐条同源）：
   - **错误四分类**：`AtlasError` 抽象基类（cause 手动赋值）+ `BusinessError`/
