@@ -7,7 +7,27 @@
 > （协议单点：规范与向量同仓，transport/frame -update 生成；本仓 CI 检出 atlas
 > `feat/actor` 注入 `ATLAS_GOLDEN_DIR`，用例数以 manifest 为准动态消费，新增用例无需改本仓）。
 
-## 当前状态（2026-09-03，v0.3 通道传输完成）
+## 当前状态（2026-09-03，v0.4 真网关验收完成——TS 侧路线图收官）
+
+- **v0.4 交付**：对集成服务器 10.10.9.36 真网关（模板四服务 feat/actor 基线）的
+  端到端验收全绿，脚本 `examples/smoke.mjs`（四形态，对齐 Go smoke 口径）+
+  `examples/mock-gateway.mjs`（本地 mock 验证脚本逻辑）。验收记录（2026-09-03）：
+  - **TCP 业务闭环**（9001）：注册 → 登录 → 业务心跳 3 次往返 → 冒烟通过；
+  - **WS single 闭环**（9002）：同上全绿（single 形态：WS 承载业务+战斗）；
+  - **UDP 战斗协议通道探针**（9004）：拨号 → 传输心跳往返探针 OK（模板 D6：战斗
+    通道不做业务 Login，会话绑定业务通道）；
+  - **dual 双通道闭环**（TCP 业务 + WS 战斗）：业务登录 + 战斗通道心跳 + 链式编排；
+  - **断线重连演练**（dual + `--reconnect-after` 重启真网关）：双通道自动重连 →
+    业务重登成功（新令牌）→ 战斗通道重绑定 → 业务心跳恢复 → 冒烟通过。
+  - 环境备注：依赖容器（etcd/redis/nats）因服务器重启曾退出，`docker start` 恢复；
+    gateway 重启用 `pkill -x gateway` + `setsid nohup`（`pkill -f` 会自匹配 ssh
+    命令行误杀自身）。
+- **库层补齐**：`nodeDialer()`（dual 异构传输按通道 kind 分派 tcp/udp/ws）+
+  `newTCPClient`/`newUDPClient`/`newDualClientNode` 便捷构造；132 测试全绿。
+  脚本缺陷修复记录：`waitSignal` 超时分支改为可取消（原实现泄漏的 fail 定时器在
+  close 后误触发退出）。
+
+## 前序状态（2026-09-03，v0.3 通道传输完成）
 
 - **v0.3 交付**（16 个通道用例，总计 130 测试全绿）：
   - **WebSocket 通道**（主入口，零平台依赖）：`WebSocketLike` 最小公约接口

@@ -160,7 +160,7 @@ describe('newTCPClient 客户端冒烟', () => {
     });
     const c = await newTCPClient(`127.0.0.1:${port}`, [WithHeartbeatInterval(0)]);
     const got: string[] = [];
-    c.on('/notify', (_op, p) => void got.push(new TextDecoder().decode(p)));
+    c.on('/notify', (_op: string, p: Uint8Array) => void got.push(new TextDecoder().decode(p)));
     await new Promise((r) => setTimeout(r, 10));
     const resp = (await c.invoke('/login', null)) as { echo: string };
     expect(resp).toEqual({ echo: '/login' });
