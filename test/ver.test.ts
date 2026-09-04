@@ -119,3 +119,30 @@ describe('serializerVersion 白名单（评审 Fix）', () => {
     expect(serializerVersion(defaultSerializer)).toBe(1);
   });
 });
+
+describe('nil req（传输心跳）与 protobuf serializer（评审缺陷修复）', () => {
+  it('ver=2 serializer 下 nil req invoke（内置 Ping）不序列化、payload 空、成功往返', async () => {
+    const { dialer } = makeDialer((server) =>
+      server.onFrame((header, body) => {
+        if (header.type !== 1) return;
+        expect(header.version).toBe(VERSION_2);
+        // 空 payload 请求：body 仅 opLen+op，无 payload 字节
+        const opLen = ((body[0] ?? 0) << 8) | (body[1] ?? 0);
+        expect(new TextDecoder().decode(body.subarray(2, 2 + opLen))).toBe(
+          '/atlas.internal.Heartbeat/Ping',
+        );
+        expect(body.length).toBe(2 + opLen); // 无 payload
+        server.sendFrame(2, header.seq, buildReplyOK(new Uint8Array(0)), VERSION_2);
+      }),
+    );
+    const c: Client = await newClient(
+      dialer,
+      { kind: 'memory', addr: 'mock' },
+      Kind.Business,
+      [WithSerializer(new Ver2Serializer())],
+    );
+    // nil req：此前无条件 marshal 会断言失败（protobuf DTO 须为 message）
+    await expect(c.invoke('/atlas.internal.Heartbeat/Ping', null)).resolves.toBeDefined();
+    await c.close();
+  });
+});

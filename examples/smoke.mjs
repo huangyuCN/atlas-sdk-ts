@@ -17,16 +17,20 @@ import {
   WithHeartbeatInterval,
   WithInvokeTimeout,
   WithOnReconnected,
+  WithSerializer,
   WithSessionHeartbeat,
   newWSClient,
 } from '../dist/index.js';
 import { newTCPClient, newUDPClient, newDualClientNode } from '../dist/node.js';
+import { ProtobufSerializer } from '../dist/protobuf.js';
+import { registry, schemas, newMsg, fromPb } from './gatewayv1.mjs';
 
 // ---- 协议常量与 DTO（与模板 api/gateway/v1 一致；正式 DTO 由 atlas sdk gen 生成）----
 const opRegister = '/gateway.v1.GatewayAuth/Register';
 const opLogin = '/gateway.v1.GatewayAuth/Login';
 const opHeartbeat = '/gateway.v1.GatewayAuth/Heartbeat';
 const SMOKE_PASSWORD = 'pw-123456';
+
 
 // ---- CLI ----
 const arg = (name, dflt = '') => {
@@ -38,9 +42,34 @@ const addr = arg('addr', '127.0.0.1:9001');
 const tcpAddr = arg('tcp', '127.0.0.1:9001');
 const wsAddr = arg('ws', '127.0.0.1:9002');
 const reconnectAfter = Number(arg('reconnect-after', '0'));
+const serializer = arg('serializer', 'json'); // json | protobuf
 const account = arg('account', 'smoke-' + Date.now());
 
+// ---- DTO 工厂：按 -serializer 模式返回 plain object（json）或 @bufbuild message（protobuf）----
+const isProtobuf = serializer === 'protobuf';
+
+/** 请求 DTO 构造（按编码模式）。 */
+function mkReq(reqName, data) {
+  if (isProtobuf) {
+    return newMsg(schemas[reqName], data);
+  }
+  return data;
+}
+
+/** 从响应取字段：json 返回对象直接取；protobuf 返回原始字节，按 op 的响应
+ * schema fromBinary 解码后取字段（SDK invoke 固定 unmarshal(data, null)，protobuf
+ * 非自描述返回原样字节，调用方按 schema 解码——与 Go 侧 resp-target 分工对齐）。
+ */
+function respVal(schemaName, resp, field) {
+  if (isProtobuf) {
+    const decoded = fromPb(schemas[schemaName], resp);
+    return decoded[field];
+  }
+  return resp ? resp[field] : undefined;
+}
+
 const log = (...a) => console.log('[冒烟]', ...a);
+log('载荷编码:', serializer);
 const fail = (msg) => {
   console.error('[冒烟] 失败:', msg);
   process.exit(1);
@@ -61,7 +90,12 @@ function signal() {
   return { promise, done: () => resolve() };
 }
 
-const commonOpts = [WithHeartbeatInterval(5_000), WithInvokeTimeout(5_000), WithBackoff(200, 3_000)];
+const commonOpts = [
+  WithHeartbeatInterval(5_000),
+  WithInvokeTimeout(5_000),
+  WithBackoff(200, 3_000),
+  ...(isProtobuf ? [WithSerializer(new ProtobufSerializer(registry))] : []),
+];
 
 /** 会话心跳配置：闭包携带最新 token/player，未登录时跳过本轮（网关租期 30s，周期 2s）。 */
 const sessionHeartbeatOpt = () =>
@@ -69,43 +103,52 @@ const sessionHeartbeatOpt = () =>
     if (!state.token) return null;
     return {
       op: opHeartbeat,
-      req: { token: state.token, playerId: state.player, ts: String(Date.now()) },
+      req: mkReq('HeartbeatRequest', {
+        token: state.token,
+        playerId: state.player,
+        ts: isProtobuf ? Date.now() : String(Date.now()),
+      }),
     };
   });
 
 /** 会话重登钩子：失败抛错（SDK 视为本次重连未完成，退避重试）。 */
 const reloginHook = (done) =>
   WithOnReconnected(async () => {
-    const rep = await client.invoke(opLogin, {
-      playerId: state.player,
-      password: SMOKE_PASSWORD,
-    });
-    state.player = rep.playerId;
-    state.token = rep.token;
+    const rep = await client.invoke(
+      opLogin,
+      mkReq('LoginRequest', { playerId: state.player, password: SMOKE_PASSWORD }),
+    );
+    state.player = respVal('LoginReply', rep, 'playerId');
+    state.token = respVal('LoginReply', rep, 'token');
     log('重连后重登成功（新令牌已存）');
     done();
   });
 
 async function registerAndLogin() {
-  const reg = await client.invoke(opRegister, {
-    account,
-    password: SMOKE_PASSWORD,
-    nickname: '冒烟玩家',
-  });
-  state.player = reg.playerId;
+  const reg = await client.invoke(
+    opRegister,
+    mkReq('RegisterRequest', { account, password: SMOKE_PASSWORD, nickname: '冒烟玩家' }),
+  );
+  state.player = respVal('RegisterReply', reg, 'playerId');
   log('注册成功 playerId=' + state.player);
-  const rep = await client.invoke(opLogin, { playerId: state.player, password: SMOKE_PASSWORD });
-  state.player = rep.playerId;
-  state.token = rep.token;
+  const rep = await client.invoke(
+    opLogin,
+    mkReq('LoginRequest', { playerId: state.player, password: SMOKE_PASSWORD }),
+  );
+  state.player = respVal('LoginReply', rep, 'playerId');
+  state.token = respVal('LoginReply', rep, 'token');
 }
 
 async function businessHeartbeats(n) {
   for (let i = 0; i < n; i++) {
-    await client.invoke(opHeartbeat, {
-      token: state.token,
-      playerId: state.player,
-      ts: String(Date.now()),
-    });
+    await client.invoke(
+      opHeartbeat,
+      mkReq('HeartbeatRequest', {
+        token: state.token,
+        playerId: state.player,
+        ts: isProtobuf ? Date.now() : String(Date.now()),
+      }),
+    );
     await sleep(200);
   }
 }

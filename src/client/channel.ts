@@ -195,7 +195,14 @@ export class Channel {
     const gen = this.gen;
     if (!gen) throw new NetworkError('连接未建立');
     const seq = ++this.seqCounter;
-    const body = buildRequestBody(op, this.settings.serializer.marshal(req));
+    // nil req（传输心跳 Ping 等）跳过序列化：payload 空（对齐 Go invoke 的
+    // req != nil 特判；评审缺陷：此前无条件 marshal，protobuf serializer 对
+    // null req 断言失败）。
+    const payload =
+      req === null || req === undefined
+        ? new Uint8Array(0)
+        : this.settings.serializer.marshal(req);
+    const body = buildRequestBody(op, payload);
     const timeoutMs = io.timeoutMs ?? this.settings.invokeTimeoutMs;
     const key = `${gen.epoch}:${seq}`;
     const outcome = await new Promise<PendingOutcome>((resolve, reject) => {
