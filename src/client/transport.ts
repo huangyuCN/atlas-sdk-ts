@@ -49,8 +49,9 @@ export type TransportDialer = (cfg: DialConfig) => Promise<ChannelTransport>;
 export interface MockServer {
   /** 注册客户端帧处理器（客户端每次 writeFrame 回调一次）。 */
   onFrame(handler: (header: Header, body: Uint8Array) => void): void;
-  /** 投递一帧给客户端读循环（服务端主动发送：响应或推送）。 */
-  sendFrame(type: number, seq: number, body: Uint8Array): void;
+  /** 投递一帧给客户端读循环（服务端主动发送：响应或推送）；
+   * version 为响应帧头载荷编码（载荷编码协商 ver 分派测试用，缺省 1）。 */
+  sendFrame(type: number, seq: number, body: Uint8Array, version?: number): void;
   /** 模拟服务端自动应答：收到 Request 帧后回同 seq 的 Response（statusHex 空 = 成功）。 */
   autoReply(payloadFor: (op: string, payload: Uint8Array) => Uint8Array): void;
   /** 模拟服务端主动推送 Notify 帧。 */
@@ -85,10 +86,11 @@ export function createMockTransport(): { transport: ChannelTransport; server: Mo
     onFrame(handler) {
       frameHandler = handler;
     },
-    sendFrame(type, seq, body) {
+    sendFrame(type, seq, body, version = 1) {
       if (isClosed) return;
-      // 服务端帧按同一线格式编码（magic/version/type 合法，bodyLen=body.length）
-      const h: Header = { magic: 0x41544c53, version: 1, type: type as Header['type'], seq, length: body.length };
+      // 服务端帧按同一线格式编码（magic/version/type 合法，bodyLen=body.length；
+      // version 对齐 Go fakeServer.replyVer：服务端配置的响应帧头载荷编码，缺省 1）
+      const h: Header = { magic: 0x41544c53, version, type: type as Header['type'], seq, length: body.length };
       deliver({ header: h, body });
     },
     autoReply(payloadFor) {

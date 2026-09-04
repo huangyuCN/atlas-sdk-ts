@@ -1,11 +1,17 @@
-// 测试工具：golden 向量加载 + 字节构造辅助（与 atlas-sdk-go/frame/golden_test.go 的
-// 构造方式对称，保证同一份向量两侧可复现）。
+// 测试工具：golden 向量加载 + 字节构造辅助 + 内核测试惯用拨号器/轮询等待（与
+// atlas-sdk-go/frame/golden_test.go 的构造方式对称，保证同一份向量两侧可复现）。
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect } from 'vitest';
 import { ProtocolError, type Status } from '../src/frame/index.js';
+import {
+  createMockTransport,
+  type ChannelTransport,
+  type MockServer,
+  type TransportDialer,
+} from '../src/client/transport.js';
 
 /** golden 向量目录：默认 ../atlas/testdata/golden（与本仓同级的 atlas 主仓——
  * 规范 §3.2/§8.1 协议单点：规范与向量同仓，四语言消费同一份向量；
@@ -210,5 +216,37 @@ export function assertStatusMatches(actual: Status, want: Record<string, unknown
     for (const [k, v] of entries) {
       expect(actual.metadata?.[k]).toBe(v);
     }
+  }
+}
+
+// ---- 内核测试惯用辅助（提取自 kernel.test.ts；ver 分派等集成测试复用） ----
+
+/** 测试拨号器：每次拨号产出新一代 mock 传输与对应服务端模拟器；
+ * onServer 在拨号时立即回调（配置应答行为无需等 newClient 完成）。 */
+export function makeDialer(
+  onServer?: (server: MockServer, index: number, transport: ChannelTransport) => void,
+): {
+  dialer: TransportDialer;
+  servers: MockServer[];
+  transports: ChannelTransport[];
+} {
+  const servers: MockServer[] = [];
+  const transports: ChannelTransport[] = [];
+  const dialer: TransportDialer = async () => {
+    const { transport, server } = createMockTransport();
+    servers.push(server);
+    transports.push(transport);
+    onServer?.(server, servers.length - 1, transport);
+    return transport;
+  };
+  return { dialer, servers, transports };
+}
+
+/** 轮询等待条件成立（避免测试固定 sleep 的脆弱性）。 */
+export async function waitFor(cond: () => boolean, timeoutMs = 2000): Promise<void> {
+  const start = Date.now();
+  while (!cond()) {
+    if (Date.now() - start > timeoutMs) throw new Error('waitFor 超时');
+    await new Promise((r) => setTimeout(r, 5));
   }
 }

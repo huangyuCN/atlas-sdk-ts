@@ -1,4 +1,4 @@
-// 协议层公共导出（帧编解码 / 包络 / Status / body / 错误分类）。
+// 协议层公共导出（帧编解码 / 包络 / Status / body / 错误分类 / 载荷编码版本）。
 export {
   HEADER_SIZE,
   MAGIC,
@@ -6,9 +6,11 @@ export {
   MAX_OPERATION_LEN,
   MsgType,
   VERSION,
+  VERSION_2,
 } from './constants.js';
-export type { Header } from './constants.js';
+export type { Header, Versioned } from './constants.js';
 export { ProtocolError } from './protocolError.js';
+export { checkHeader } from './header.js';
 export {
   decodeFrame,
   encodeFrame,

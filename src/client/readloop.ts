@@ -36,8 +36,14 @@ export function startReadLoop(ch: Channel, gen: Generation): void {
   })();
 }
 
-/** Response 帧：按 (epoch, seq) 匹配 in-flight 结算；包络非法返回致命错误。 */
+/** Response 帧：响应 ver 与载荷编码比对（规范 §3.1），再按 (epoch, seq) 匹配
+ * in-flight 结算；包络非法返回致命错误。 */
 function dispatchResponse(ch: Channel, gen: Generation, hdr: Header, body: Uint8Array): ProtocolError | null {
+  // 响应帧 ver 校验：服务端应回显请求的载荷编码版本（规范 §3.1）；不一致即
+  // 失步或服务端违约——协议级致命（终止连接，不重连）。
+  if (hdr.version !== ch.ver) {
+    return new ProtocolError(`响应帧 version ${hdr.version} 与载荷编码 ${ch.ver} 不一致`);
+  }
   let reply;
   try {
     reply = decodeReply(body);

@@ -1,6 +1,6 @@
 // 帧头校验与头编解码（大端 16B：magic(4) ver(1) type(1) rsv(2) seq(4) bodyLen(4)）。
 import { getU32BE, putU32BE } from './bytes.js';
-import { HEADER_SIZE, MAGIC, MAX_BODY_SIZE, VERSION, type Header, type MsgType } from './constants.js';
+import { HEADER_SIZE, MAGIC, MAX_BODY_SIZE, VERSION, VERSION_2, type Header, type MsgType } from './constants.js';
 import { ProtocolError } from './protocolError.js';
 
 /** 校验帧头合法性；maxBodySize ≤ 0 时回退绝对上限（与 Go Header.Check 同构）。 */
@@ -15,7 +15,9 @@ export function checkHeader(h: Header, maxBodySize: number): void {
   if (h.type !== 1 && h.type !== 2 && h.type !== 3) {
     throw new ProtocolError(`frame: invalid type: ${h.type}`);
   }
-  if (h.version !== VERSION) {
+  // 版本白名单：ver=1（protojson）/ ver=2（protobuf 二进制）；其余拒绝（前向
+  // 版本协商位留给未来扩展，未知版本即协议非法；与 Go Header.Check 同构）。
+  if (h.version !== VERSION && h.version !== VERSION_2) {
     throw new ProtocolError(`frame: invalid version: ${h.version}`);
   }
   if (h.length > max) {

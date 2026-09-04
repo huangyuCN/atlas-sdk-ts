@@ -1,0 +1,46 @@
+# npm 发布工作流（发布就绪形态）：push tag v* 或手动触发。
+# 前置配置：仓库 Settings → Secrets → Actions 添加 NPM_TOKEN（npm publish 权限的
+# automation token）。配置后 push tag（如 v0.5.0）即可发布；未配置时构建步骤成功、
+# 发布步骤明确报缺凭证。
+name: Publish
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: '仅验证构建与 pack，不发布'
+        type: boolean
+        default: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+      - name: 类型检查 + 测试（含 golden 对齐）
+        run: pnpm check
+      - name: 构建（ESM + CJS + d.ts）
+        run: pnpm build
+      - name: pack 预检（产物内容与体积）
+        run: npm pack --dry-run
+      - name: 发布（tag 触发或手动非 dry-run）
+        if: ${{ startsWith(github.ref, 'refs/tags/v') || (inputs.dry_run == false) }}
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: dry-run 说明（发布就绪校验完成，未发布）
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') && (inputs.dry_run != false) }}
+        run: echo '发布就绪校验通过；实际发布请 push v* tag 或以 dry_run=false 手动触发'

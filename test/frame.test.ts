@@ -1,12 +1,17 @@
-// 帧编解码单元测试：大端字节序、零值补默认、校验失败分支、消息边界失步、流式三态。
+// 帧编解码单元测试：大端字节序、零值补默认、校验失败分支、消息边界失步、流式三态、版本白名单。
 import { describe, expect, it } from 'vitest';
 import {
+  MAGIC,
   MAX_BODY_SIZE,
   MsgType,
   ProtocolError,
+  VERSION,
+  VERSION_2,
+  checkHeader,
   decodeFrame,
   encodeFrame,
   readFrameFrom,
+  type Header,
 } from '../src/frame/index.js';
 import { bytesOf, concat, concatFrame, putU32BE } from './helpers.js';
 
@@ -168,5 +173,35 @@ describe('readFrameFrom（流式语义，Go frame.Read 同构三态）', () => {
     const res = readFrameFrom(buf, 0);
     expect(res.ok).toBe(true);
     if (res.ok) expect(res.header.seq).toBe(0x80000001);
+  });
+});
+
+describe('版本白名单（载荷编码协商，规范 §3.1）', () => {
+  it('ver=1/ver=2 合法，未知版本拒绝（对齐 Go TestCheckVersionWhitelist）', () => {
+    const cases: Array<{ ver: number; valid: boolean }> = [
+      { ver: VERSION, valid: true }, // ver=1 protojson
+      { ver: VERSION_2, valid: true }, // ver=2 protobuf 二进制
+      { ver: 0, valid: false }, // 未知
+      { ver: 3, valid: false }, // 前向保留：未知版本即协议非法
+      { ver: 99, valid: false },
+    ];
+    for (const tc of cases) {
+      const h: Header = { magic: MAGIC, version: tc.ver, type: MsgType.Request, seq: 1, length: 0 };
+      if (tc.valid) expect(() => checkHeader(h, MAX_BODY_SIZE)).not.toThrow();
+      else expect(() => checkHeader(h, MAX_BODY_SIZE)).toThrow(ProtocolError);
+    }
+  });
+
+  it('ver=2 帧读写往返：白名单放宽后二进制形态帧可正常编解码（对齐 Go TestReadWriteVersion2Frame）', () => {
+    const body = Uint8Array.of(0x0a, 0x01, 0x78); // protobuf wire 字节（field 1 = "x"）
+    const out = encodeFrame(
+      { magic: MAGIC, version: VERSION_2, type: MsgType.Response, seq: 7, length: 0 },
+      body,
+      0,
+    );
+    const got = decodeFrame(out, 0);
+    expect(got.header.version).toBe(VERSION_2);
+    expect(got.header.seq).toBe(7);
+    expect(got.body).toEqual(body);
   });
 });

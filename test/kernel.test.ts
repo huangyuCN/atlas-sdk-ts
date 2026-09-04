@@ -27,44 +27,12 @@ import {
   type MockServer,
   type TransportDialer,
 } from '../src/index.js';
-import { buildReplyErr, buildReplyOK, buildTestStatus } from './helpers.js';
 import type { ChannelTransport } from '../src/client/transport.js';
+import { buildReplyErr, buildReplyOK, buildTestStatus, makeDialer, waitFor } from './helpers.js';
 
 const replyOK = (payload: unknown) => buildReplyOK(encodeUtf8(JSON.stringify(payload)));
 const replyErr = (code: number, reason: string, msg = '') =>
   buildReplyErr(buildTestStatus(code, reason, msg, null), new Uint8Array(0));
-
-/** 测试拨号器：每次拨号产出新一代 mock 传输与对应服务端模拟器；
- * onServer 在拨号时立即回调（配置应答行为无需等 newClient 完成）。 */
-function makeDialer(
-  onServer?: (server: MockServer, index: number, transport: ChannelTransport) => void,
-): {
-  dialer: TransportDialer;
-  servers: MockServer[];
-  transports: ChannelTransport[];
-} {
-  const servers: MockServer[] = [];
-  const transports: ChannelTransport[] = [];
-  const dialer: TransportDialer = async () => {
-    const { transport, server } = await import('../src/index.js').then((m) =>
-      m.createMockTransport(),
-    );
-    servers.push(server);
-    transports.push(transport);
-    onServer?.(server, servers.length - 1, transport);
-    return transport;
-  };
-  return { dialer, servers, transports };
-}
-
-/** 轮询等待条件成立（避免测试固定 sleep 的脆弱性）。 */
-async function waitFor(cond: () => boolean, timeoutMs = 2000): Promise<void> {
-  const start = Date.now();
-  while (!cond()) {
-    if (Date.now() - start > timeoutMs) throw new Error('waitFor 超时');
-    await new Promise((r) => setTimeout(r, 5));
-  }
-}
 
 describe('Invoke：请求-响应匹配', () => {
   it('成功往返：请求 payload 与响应解析', async () => {

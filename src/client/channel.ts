@@ -15,6 +15,7 @@ import {
   type InvokeOptions,
   type Option,
 } from './options.js';
+import { serializerVersion } from './serializer.js';
 import type { ChannelTransport, DialConfig, TransportDialer } from './transport.js';
 
 /** 通道角色：业务 / 战斗（dual 形态）。 */
@@ -66,7 +67,6 @@ interface QueuedRequest {
 type AtlasErrorKind = NetworkError | TimeoutError | ProtocolError;
 
 const MAGIC_DEFAULT = 0x41544c53;
-const VERSION_DEFAULT = 1;
 
 /** 创建一个 Channel（连接本体；start 由 Client 编排器驱动）。 */
 export function newChannel(args: {
@@ -83,6 +83,10 @@ export class Channel {
   readonly dialConfig: DialConfig;
   readonly settings: ReturnType<typeof applyOptions>;
   readonly dialer: TransportDialer;
+  /** 载荷编码版本（由 serializer 推导：实现了 frame.Versioned 者用声明值，默认
+   * ver=1）；写帧时填帧头 version，响应帧校验与之比对（规范 §3.1 载荷编码协商）。
+   * @internal 同目录协作模块（readloop 响应校验）使用；不进公共导出面。 */
+  readonly ver: number;
 
   private _state: ChannelState = 'disconnected';
   private _closed = false;
@@ -125,6 +129,7 @@ export class Channel {
     this.dialConfig = args.dialConfig;
     this.dialer = args.dialer;
     this.settings = applyOptions(args.opts);
+    this.ver = serializerVersion(this.settings.serializer);
   }
 
   get state(): ChannelState {
@@ -205,7 +210,7 @@ export class Channel {
       this.inflight.set(key, entry);
       void this.writeExclusive(() =>
         gen.transport.writeFrame(
-          { magic: MAGIC_DEFAULT, version: VERSION_DEFAULT, type: 1, seq, length: body.length },
+          { magic: MAGIC_DEFAULT, version: this.ver, type: 1, seq, length: body.length },
           body,
           this.settings.maxBodySize,
         ),

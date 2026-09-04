@@ -1,7 +1,7 @@
 {
   "name": "@huangyucn/atlas-sdk-ts",
-  "version": "0.1.0",
-  "description": "Atlas 多语言客户端 SDK 的 TypeScript 实现：帧协议编解码 + 运行时内核 + 通道传输（浏览器与 Node 双目标）",
+  "version": "0.5.0",
+  "description": "Atlas 帧协议的 TypeScript 客户端 SDK：帧编解码 + 运行时内核 + WebSocket/TCP/UDP 通道（浏览器与 Node 双目标）",
   "type": "module",
   "license": "Apache-2.0",
   "engines": {
@@ -20,10 +20,17 @@
       "types": "./dist/node.d.ts",
       "import": "./dist/node.js",
       "require": "./dist/node.cjs"
+    },
+    "./protobuf": {
+      "types": "./dist/protobuf.d.ts",
+      "import": "./dist/protobuf.js",
+      "require": "./dist/protobuf.cjs"
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "build": "tsup",
@@ -37,5 +44,29 @@
     "tsup": "^8.5.1",
     "typescript": "^5.9.3",
     "vitest": "^4.1.11"
+  },
+  "keywords": [
+    "atlas",
+    "game",
+    "websocket",
+    "tcp",
+    "udp",
+    "kcp",
+    "client",
+    "sdk",
+    "lockstep",
+    "帧同步"
+  ],
+  "sideEffects": false,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/huangyuCN/atlas-sdk-ts.git"
+  },
+  "bugs": {
+    "url": "https://github.com/huangyuCN/atlas-sdk-ts/issues"
+  },
+  "homepage": "https://github.com/huangyuCN/atlas-sdk-ts#readme",
+  "dependencies": {
+    "@bufbuild/protobuf": "^2.14.1"
   }
 }

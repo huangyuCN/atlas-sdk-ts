@@ -137,10 +137,36 @@
   不做业务 Login（每玩家单会话，二次登录顶掉业务通道会话），连通性验证用传输
   心跳往返（§4）。
 
+## v0.5：发布工程 + 二进制 protobuf 演进（打样就绪）
+
+- **A. npm 发布工程（已完成，发布就绪形态）**：
+  - 包元数据完善（repository/bugs/homepage/keywords/sideEffects=false）；
+    首发版本 **0.5.0**（语义化版本策略：0.x 阶段 minor = 功能批次，patch = 修复；
+    1.0 门槛 = API 稳定承诺 + 发布定稿；包名占位 `@huangyucn/atlas-sdk-ts`，§10 待定项可改）；
+  - `.github/workflows/publish.yml`：tag `v*` 触发（或手动 dry_run）——测试（含 golden
+    对齐）→ 构建 → pack 预检 → `npm publish --access public`（NPM_TOKEN secret 由
+    使用者配置；未配置时校验步骤照常、发布步骤明确报缺凭证）；
+  - `npm pack --dry-run` 验证：17 文件全为 dist 产物 + README/LICENSE，179.1 kB。
+- **B. 二进制 protobuf 演进（打样就绪，2026-09-04 随规范 §3.1 载荷编码协商设计）**：
+  规范先行（规范修订已写入 atlas 主仓）；Go 侧打样 ProtobufSerializer（本仓外部——
+  atlas-sdk-go 本地批次）；TS 侧打样已完成，四个增量点（内核与现有 API 零破坏）：
+  1. `frame`：`VERSION_2` 常量 + 版本白名单放宽（checkHeader 接受 {1,2}，未知版本仍拒绝）；
+     `frame.Versioned` 可选接口（载荷编码版本声明——放协议层避免 contrib → client 依赖环）；
+  2. `client`：`serializerVersion` 推导（未实现 Versioned 者默认 ver=1）；请求帧头 ver 由
+     serializer 决定；响应帧头 ver 校验（不一致 = 失步，协议级致命终止不重连）；
+  3. `./protobuf` 子入口：`ProtobufSerializer`（@bufbuild/protobuf 断言式，ver=2）——
+     DTO 须为 @bufbuild message，schema 按 $typeName 注入 registry；依赖归子入口，
+     主入口零 protobuf 依赖（层级镜像 Go contrib/protobuf）；
+  4. **测试**：frame 白名单（1/2/未知拒绝）+ ver=2 帧往返 + serializerVersion 推导 +
+     ver=2 invoke（透传形态）+ @bufbuild DTO 端到端（往返/断言拒绝/未注册 schema/
+     ver 不一致失步终止）；全量 143 测试绿，主入口产物 0 处 @bufbuild 引用。
+- **边界（对齐 Go roadmap 口径）**：服务端支持 ver=2 前勿在真实连接启用（打样就绪形态）；
+  golden vectors 二进制形态用例（atlas 主仓向量包先加形态、两侧再消费）与生成器产
+  op → input/output schema 映射（kernel resp-target 全自动绑定）属后续批次。
+
 ## 后续（随规范路线）
 
-- v0.5+：C# 仓（规范 P3）跟进后，跨仓 CI 机器人（向量更新 PR + 每日冒烟，规范 P5）；
-- npm 包名与发布渠道为规范 §10 待定项（当前占位 `@huangyucn/atlas-sdk-ts`，可改）。
+- C# 仓（规范 P3）跟进后，跨仓 CI 机器人（向量更新 PR + 每日冒烟，规范 P5）。
 
 ## 开发约定
 

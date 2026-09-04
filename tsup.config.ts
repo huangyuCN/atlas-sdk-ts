@@ -6,8 +6,10 @@ import { defineConfig } from 'tsup';
 // 引擎覆盖面；协议层/内核不依赖 ES2022 独有语法（Error.cause 也按手动赋值约定处理）。
 // 协议层与内核不依赖 node 内置模块（纯 Uint8Array/DataView 等语言能力），
 // 同一份产物同时服务浏览器与 Node 两个目标。
+// 子入口：node（Node TCP/UDP 通道）、protobuf（@bufbuild 依赖的 ProtobufSerializer，
+// ver=2——依赖归子入口，主入口零 protobuf 依赖）。
 export default defineConfig({
-  entry: ['src/index.ts', 'src/node.ts'],
+  entry: ['src/index.ts', 'src/node.ts', 'src/protobuf.ts'],
   format: ['esm', 'cjs'],
   dts: true,
   target: 'es2020',
