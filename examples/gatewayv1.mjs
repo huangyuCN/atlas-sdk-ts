@@ -38,6 +38,8 @@ const fd = create(FileDescriptorProtoSchema, {
     { name: 'LoginReply', field: [strField('player_id', 1), strField('token', 2)] },
     { name: 'HeartbeatRequest', field: [strField('token', 1), strField('player_id', 2), i64Field('ts', 3)] },
     { name: 'HeartbeatReply', field: [i64Field('ts', 1), u64Field('server_time_unix_ms', 2)] },
+    { name: 'JoinBattleRequest', field: [strField('token', 1), strField('player_id', 2), strField('battle_id', 3)] },
+    { name: 'JoinBattleReply', field: [create(FieldDescriptorProtoSchema, { name: 'ok', number: 1, label: L_OPT, type: 8, jsonName: 'ok' }), strField('message', 2)] },
   ],
 });
 
@@ -50,6 +52,8 @@ export const schemas = {
   LoginReply: registry.getMessage('gateway.v1.LoginReply'),
   HeartbeatRequest: registry.getMessage('gateway.v1.HeartbeatRequest'),
   HeartbeatReply: registry.getMessage('gateway.v1.HeartbeatReply'),
+  JoinBattleRequest: registry.getMessage('gateway.v1.JoinBattleRequest'),
+  JoinBattleReply: registry.getMessage('gateway.v1.JoinBattleReply'),
 };
 
 export function newMsg(schema, data) {

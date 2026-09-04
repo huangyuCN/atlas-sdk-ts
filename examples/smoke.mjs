@@ -11,6 +11,7 @@
 // （仅探针，不做业务 Login——会话绑定业务通道）。退出码 0 = 冒烟通过。
 // 依赖 dist 产物：先 pnpm build。
 import {
+  BusinessError,
   HeartbeatOperation,
   isBusinessError,
   WithBackoff,
@@ -29,6 +30,7 @@ import { registry, schemas, newMsg, fromPb } from './gatewayv1.mjs';
 const opRegister = '/gateway.v1.GatewayAuth/Register';
 const opLogin = '/gateway.v1.GatewayAuth/Login';
 const opHeartbeat = '/gateway.v1.GatewayAuth/Heartbeat';
+const opJoinBattle = '/gateway.v1.GatewayBattle/JoinBattle';
 const SMOKE_PASSWORD = 'pw-123456';
 
 
@@ -220,6 +222,24 @@ async function runBattleChannel(form) {
   try {
     if (!(await probeAlive())) fail(`${form} 通道往返探针失败`);
     log(`${form} 通道往返探针 OK`);
+    // 战斗 payload 编解码验证（protobuf 模式）：发 JoinBattle（伪造 token）——
+    // 服务端按 ver=2 分派 codec 解码后因会话无效回业务拒绝（BusinessError）即
+    // 证明 payload 编解码正确（协议错误/解码失败才说明编解码问题）。
+    if (isProtobuf) {
+      try {
+        await client.invoke(
+          opJoinBattle,
+          mkReq('JoinBattleRequest', { token: 'no-token', playerId: 'none', battleId: 'b1' }),
+        );
+        fail(`${form} JoinBattle 应被拒绝（伪造 token），却成功`);
+      } catch (err) {
+        if (err instanceof BusinessError) {
+          log(`${form} JoinBattle 业务拒绝（protobuf 编码解码正确）`);
+        } else {
+          fail(`${form} JoinBattle 收到非业务错误 ${err?.message ?? err}（payload 编解码可能失败）`);
+        }
+      }
+    }
     if (reconnectAfter > 0) {
       log(`${reconnectAfter}ms 后请重启 gateway（等待死链重拨）`);
       await sleep(reconnectAfter);
