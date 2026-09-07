@@ -45,3 +45,16 @@ service GatewayAuth {
   rpc Login (LoginRequest) returns (LoginReply);
   rpc Heartbeat (HeartbeatRequest) returns (HeartbeatReply);
 }
+
+// JoinBattle 是战斗绑定 op 的请求/响应（战斗协议通道 UDP/KCP 用；对齐
+// atlas-game-layout 模板 D6 战斗协议 + Go smoke gatewayv1 的字段）。
+message JoinBattleRequest {
+  string token = 1;
+  string player_id = 2;
+  string battle_id = 3;
+}
+
+message JoinBattleReply {
+  bool ok = 1;
+  string message = 2;
+}
