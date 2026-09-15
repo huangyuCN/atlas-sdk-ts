@@ -25,6 +25,9 @@ export const MAX_BODY_SIZE = 2 * 1024 * 1024;
 /** operation 名独立上限（服务端 dispatch 同款，防垃圾字符串耗内存）。 */
 export const MAX_OPERATION_LEN = 4096;
 
+/** 会话槽（会话凭据）最大长度（字节）。 */
+export const MAX_SESSION_LEN = 256;
+
 /** 帧类型：请求（1）/ 响应（2）/ 服务端推送（3，不参与请求匹配）。 */
 export const MsgType = {
   Request: 1,
@@ -34,14 +37,23 @@ export const MsgType = {
 
 export type MsgType = (typeof MsgType)[keyof typeof MsgType];
 
-/** 帧头的客户端侧表示（与 Go frame.Header 同构；rsv 2 字节不表示）。 */
+/** 帧头的客户端侧表示（与 Go frame.Header 同构；rsv 次字节不表示）。 */
 export interface Header {
   magic: number;
   version: number;
   type: MsgType;
+  /** flags 位图（原 rsv 首字节；bit0 = FLAG_SESSION；缺省 0）。 */
+  flags?: number;
   seq: number;
   length: number;
 }
+
+/** 帧 flags 位图 bit0：请求帧 body 携带会话槽（sessionLen + session + payload）。
+ * 仅无连接传输（UDP/KCP）的请求帧置位；长连接按连接绑定身份、不置位。 */
+export const FLAG_SESSION = 0x01;
+
+/** 帧 flags 保留位掩码（bit1–7）：未知位即协议非法（服务端 Header.Check 同款）。 */
+export const FLAG_RESERVED_MASK = 0xfe;
 
 /** 序列化器的可选扩展接口（载荷编码版本声明，规范 §3.1 载荷编码协商）：
  * client.Serializer 的实现者（如将来的 @bufbuild/protobuf 序列化器）可选择

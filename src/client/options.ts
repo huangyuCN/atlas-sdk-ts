@@ -31,6 +31,9 @@ export interface ChannelSettings {
   hookTimeoutMs: number;
   /** 会话心跳配置（仅业务通道生效；null = 不启用）。 */
   sessionHeartbeat: SessionHeartbeatConfig | null;
+  /** 会话凭据提供者（Session 对象装配；业务层亦可自给）：无连接传输
+   * （UDP/KCP）的请求帧据此自动携带会话槽（frame.FLAG_SESSION）。 */
+  sessionToken: (() => string) | null;
 }
 
 /** 通道级函数式配置项。 */
@@ -50,6 +53,7 @@ export function defaultSettings(): ChannelSettings {
     onReconnected: null,
     hookTimeoutMs: 10_000,
     sessionHeartbeat: null,
+    sessionToken: null,
   };
 }
 
@@ -126,6 +130,16 @@ export function WithSessionHeartbeat(
 ): Option {
   return (s) => {
     s.sessionHeartbeat = { intervalMs, factory };
+  };
+}
+
+/** 注入会话凭据提供者（对齐 Go WithSessionTokenProvider；由 Session 对象装配，
+ * 业务层亦可自给）：无连接传输（UDP/KCP）的请求帧据此自动携带会话槽
+ * （frame.FLAG_SESSION），服务端按凭据验证身份；长连接（TCP/WS）按连接绑定，
+ * 不携带。返回空串表示当前无会话（匿名帧，如登录前的 Login 请求）。 */
+export function WithSessionTokenProvider(fn: () => string): Option {
+  return (s) => {
+    s.sessionToken = fn;
   };
 }
 

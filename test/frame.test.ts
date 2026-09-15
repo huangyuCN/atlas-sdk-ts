@@ -1,6 +1,7 @@
-// 帧编解码单元测试：大端字节序、零值补默认、校验失败分支、消息边界失步、流式三态、版本白名单。
+// 帧编解码单元测试：大端字节序、零值补默认、校验失败分支、消息边界失步、流式三态、版本白名单、flags 位图。
 import { describe, expect, it } from 'vitest';
 import {
+  FLAG_SESSION,
   MAGIC,
   MAX_BODY_SIZE,
   MsgType,
@@ -203,5 +204,50 @@ describe('版本白名单（载荷编码协商，规范 §3.1）', () => {
     expect(got.header.version).toBe(VERSION_2);
     expect(got.header.seq).toBe(7);
     expect(got.body).toEqual(body);
+  });
+});
+
+describe('帧 flags 位图（帧头 buf[6]，原 rsv 首字节）', () => {
+  it('encodeFrame 写入 flags 位图：FlagSession → buf[6]=1，rsv 次字节恒 0', () => {
+    const out = encodeFrame(
+      { magic: MAGIC, version: 1, type: MsgType.Request, flags: FLAG_SESSION, seq: 1, length: 0 },
+      bytesOf('x'),
+      0,
+    );
+    expect(out[6]).toBe(1); // flags = FlagSession
+    expect(out[7]).toBe(0); // rsv 次字节
+  });
+
+  it('flags 缺省编码为 0（原 rsv 行为不变）', () => {
+    const out = encodeFrame(
+      { magic: MAGIC, version: 1, type: MsgType.Request, seq: 1, length: 0 },
+      bytesOf('x'),
+      0,
+    );
+    expect(out[6]).toBe(0);
+  });
+
+  it('flags 头读写往返（对齐 Go Header.Flags 语义）', () => {
+    const out = encodeFrame(
+      { magic: MAGIC, version: 1, type: MsgType.Request, flags: FLAG_SESSION, seq: 9, length: 0 },
+      bytesOf('x'),
+      0,
+    );
+    const { header } = decodeFrame(out, 0);
+    expect(header.flags).toBe(FLAG_SESSION);
+    expect(header.seq).toBe(9);
+  });
+
+  it('未知位（bit1–7）拒绝为协议错误：checkHeader 与 decodeFrame/readFrameFrom 同拦', () => {
+    for (const flags of [0x02, 0x40, 0xff]) {
+      const h: Header = { magic: MAGIC, version: 1, type: MsgType.Request, flags, seq: 1, length: 0 };
+      expect(() => checkHeader(h, MAX_BODY_SIZE)).toThrow(ProtocolError);
+    }
+    const bad = concatFrame(MsgType.Request, 1, bytesOf('x'));
+    bad[6] = 0x02;
+    expect(() => decodeFrame(bad, 0)).toThrow(ProtocolError);
+    const res = readFrameFrom(bad, 0);
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toBe('protocol');
   });
 });

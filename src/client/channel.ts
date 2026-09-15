@@ -5,7 +5,8 @@
 // 状态机：disconnected → connecting → connected ⇄ reconnecting（协议错误终止回
 // disconnected 且不重连）。重连编排（supervisor）与心跳循环在 reconnect.ts /
 // heartbeat.ts 中作为协作模块实现，通过本类暴露的内部协作方法交互。
-import { buildRequestBody } from '../frame/body.js';
+import { buildRequestBody, buildRequestBodyWithSession } from '../frame/body.js';
+import { FLAG_SESSION } from '../frame/constants.js';
 import type { Status } from '../frame/status.js';
 import { BusinessError, NetworkError, ProtocolError, TimeoutError } from './errors.js';
 import { NotifyRegistry, type NotifyHandler } from './notify.js';
@@ -87,6 +88,9 @@ export class Channel {
    * ver=1）；写帧时填帧头 version，响应帧校验与之比对（规范 §3.1 载荷编码协商）。
    * @internal 同目录协作模块（readloop 响应校验）使用；不进公共导出面。 */
   readonly ver: number;
+  /** 无连接传输（UDP/KCP）标记：请求帧按帧会话槽携带凭据（与 Go frameSessionSlot
+   * 同构，按拨号配置的传输形态在构造期判定）。 */
+  private readonly frameSessionSlot: boolean;
 
   private _state: ChannelState = 'disconnected';
   private _closed = false;
@@ -130,6 +134,7 @@ export class Channel {
     this.dialer = args.dialer;
     this.settings = applyOptions(args.opts);
     this.ver = serializerVersion(this.settings.serializer);
+    this.frameSessionSlot = args.dialConfig.kind === 'udp' || args.dialConfig.kind === 'kcp';
   }
 
   get state(): ChannelState {
@@ -202,7 +207,23 @@ export class Channel {
       req === null || req === undefined
         ? new Uint8Array(0)
         : this.settings.serializer.marshal(req);
-    const body = buildRequestBody(op, payload);
+    // 无连接传输（UDP/KCP）：凭据非空时置位 FLAG_SESSION 并用带会话槽 body，
+    // 供服务端按帧验证身份（匿名帧不置位）；长连接（TCP/WS）按连接绑定，
+    // 不置位、body 无会话字段（与 Go invokeOnce 同构）。
+    let flags = 0;
+    let body: Uint8Array;
+    const sessionToken = this.settings.sessionToken;
+    if (this.frameSessionSlot && sessionToken) {
+      const token = sessionToken();
+      if (token !== '') {
+        flags = FLAG_SESSION;
+        body = buildRequestBodyWithSession(op, token, payload);
+      } else {
+        body = buildRequestBody(op, payload);
+      }
+    } else {
+      body = buildRequestBody(op, payload);
+    }
     const timeoutMs = io.timeoutMs ?? this.settings.invokeTimeoutMs;
     const key = `${gen.epoch}:${seq}`;
     const outcome = await new Promise<PendingOutcome>((resolve, reject) => {
@@ -217,7 +238,7 @@ export class Channel {
       this.inflight.set(key, entry);
       void this.writeExclusive(() =>
         gen.transport.writeFrame(
-          { magic: MAGIC_DEFAULT, version: this.ver, type: 1, seq, length: body.length },
+          { magic: MAGIC_DEFAULT, version: this.ver, type: 1, flags, seq, length: body.length },
           body,
           this.settings.maxBodySize,
         ),

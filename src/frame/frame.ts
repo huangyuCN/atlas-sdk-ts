@@ -1,9 +1,17 @@
 // Atlas 帧编解码。
 //
 // 帧格式（与服务端 transport/frame 一致，规范 §2）：
-//   ┌──────────┬──────┬──────┬────────┬───────┬───────────┐
-//   │ magic(4) │ ver  │ type │ rsv(2) │ seq(4)│ bodyLen(4)│  大端，头固定 16B
-//   └──────────┴──────┴──────┴────────┴───────┴───────────┘
+//   ┌──────────┬──────┬──────┬──────────┬───────┬───────────┐
+//   │ magic(4) │ ver  │ type │flags(1)  │rsv(1) │ seq(4)│ bodyLen(4)│  大端，头固定 16B
+//   └──────────┴──────┴──────┴──────────┴───────┴───────────┘
+//
+// body 内部封装（与 Go frame 包对称）：
+//   ┌────────────────────────────────────────────────────────┐
+//   │ opLen(2) │ operation │ [sessionLen(2) │ session] │ payload │
+//   └────────────────────────────────────────────────────────┘
+//
+// 会话槽（flags bit0 = FLAG_SESSION）：无连接传输（UDP/KCP）的请求帧携带会话
+// 凭据供服务端验证身份；长连接（TCP/WS）按连接绑定、不置位、body 无会话字段。
 //
 // 两种使用形态（与 Go frame 包对称）：
 //   - encodeFrame/decodeFrame：消息边界传输体（WebSocket——一条消息 = 一个完整帧）；
@@ -28,6 +36,7 @@ export function encodeFrame(h: Header, body: Uint8Array, maxBodySize = 0): Uint8
     magic: h.magic === 0 ? 0x41544c53 : h.magic,
     version: h.version === 0 ? 1 : h.version,
     type: h.type,
+    flags: h.flags,
     seq: h.seq,
     length: body.length,
   };
