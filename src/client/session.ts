@@ -34,9 +34,15 @@ export interface SessionReply {
   token?: string;
 }
 
-/** ResumeReq 是会话恢复请求（凭据放请求体；长连接场景服务端亦按连接绑定校验）。 */
+/** ResumeReq 是会话恢复请求（凭据与玩家 ID 放请求体；服务端按路由表校验后重绑）。 */
 export interface ResumeReq {
   token?: string;
+  playerId?: string;
+}
+
+/** HeartbeatReply 是会话心跳回执（客户端对时用；int64 经 protojson 为字符串）。 */
+export interface HeartbeatReply {
+  serverTimeUnixMs?: string;
 }
 
 /** LogoutReq 是登出请求。 */
@@ -173,7 +179,33 @@ export class Session {
     if (token === '') {
       throw new Error('session: 无会话凭据（未登录）');
     }
-    return this.call(this.settings.ops.resume, { token } satisfies ResumeReq, invokeOpts);
+    return this.call(
+      this.settings.ops.resume,
+      { token, playerId: this.playerId() } satisfies ResumeReq,
+      invokeOpts,
+    );
+  }
+
+  /** Restore 用外部凭据恢复会话（成功后凭据由 Session 保管）：凭据来自上一代
+   * 连接（如断线前快照），区别于 resume（用保管中的凭据）。 */
+  async restore(token: string, playerId: string, ...invokeOpts: InvokeOption[]): Promise<SessionReply> {
+    if (token === '' || playerId === '') {
+      throw new Error('session: 恢复凭据与玩家 ID 不能为空');
+    }
+    return this.call(
+      this.settings.ops.resume,
+      { token, playerId } satisfies ResumeReq,
+      invokeOpts,
+    );
+  }
+
+  /** Heartbeat 手动触发一次会话心跳并返回对时回执（无载荷：服务端按连接/帧槽
+   * 定位会话续租）；与内置定时心跳语义一致，未登录显式报错。 */
+  async heartbeat(...invokeOpts: InvokeOption[]): Promise<HeartbeatReply> {
+    if (this.token() === '') {
+      throw new Error('session: 无会话凭据（未登录）');
+    }
+    return (await this.invoke(this.settings.ops.heartbeat, null, ...invokeOpts)) as HeartbeatReply;
   }
 
   /** Logout 登出并清空本地凭据（无论请求成败都清空，对齐 Go 语义）。 */
