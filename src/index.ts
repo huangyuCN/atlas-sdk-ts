@@ -39,6 +39,10 @@ export {
   type Option,
 } from './client/options.js';
 export {
+  asInvoker,
+  type Invoker,
+} from './client/invoker.js';
+export {
   defaultSessionOps,
   newSession,
   OpSessionHeartbeat,
