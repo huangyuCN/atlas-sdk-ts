@@ -239,12 +239,12 @@ describe('帧 flags 位图（帧头 buf[6]，原 rsv 首字节）', () => {
   });
 
   it('未知位（bit1–7）拒绝为协议错误：checkHeader 与 decodeFrame/readFrameFrom 同拦', () => {
-    for (const flags of [0x02, 0x40, 0xff]) {
+    for (const flags of [0x04, 0x40, 0xff]) {
       const h: Header = { magic: MAGIC, version: 1, type: MsgType.Request, flags, seq: 1, length: 0 };
       expect(() => checkHeader(h, MAX_BODY_SIZE)).toThrow(ProtocolError);
     }
     const bad = concatFrame(MsgType.Request, 1, bytesOf('x'));
-    bad[6] = 0x02;
+    bad[6] = 0x04;
     expect(() => decodeFrame(bad, 0)).toThrow(ProtocolError);
     const res = readFrameFrom(bad, 0);
     expect(res.ok).toBe(false);

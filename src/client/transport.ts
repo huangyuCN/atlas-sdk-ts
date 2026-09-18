@@ -5,6 +5,7 @@
 //              连接关闭/断连时 reject（调用方按错误分类处理）。
 //   writeFrame 整帧原子写（并发场景由内核写锁保证不交错——接口实现只需单帧写语义）。
 //   close      关闭连接；阻塞中的 readFrame 随即 reject。
+import { FLAG_REQUEST_ID, FLAG_SESSION } from '../frame/constants.js';
 import type { Header } from '../frame/constants.js';
 import { encodeFrame, type FrameRead } from '../frame/frame.js';
 import { NetworkError } from './errors.js';
@@ -96,10 +97,23 @@ export function createMockTransport(): { transport: ChannelTransport; server: Mo
     autoReply(payloadFor) {
       frameHandler = (header, body) => {
         if (header.type !== MsgTypeRequest) return;
+        // flags 感知解析：可选段（会话槽/请求幂等键）按置位跳过，payload 对齐段序
+        //（与服务端 dispatch 同构；否则新段会被误当 payload 返回，回执 JSON 解析炸）。
+        let off = 2;
         const opLen = ((body[0] ?? 0) << 8) | (body[1] ?? 0);
         const op = new TextDecoder().decode(body.subarray(2, 2 + opLen));
-        const payload = body.subarray(2 + opLen);
-        server.sendFrame(MsgTypeResponse, header.seq, payloadFor(op, payload));
+        off += opLen;
+        let rest = body.subarray(off);
+        const hasSession = (header.flags ?? 0) & FLAG_SESSION;
+        if (hasSession) {
+          const sLen = ((rest[0] ?? 0) << 8) | (rest[1] ?? 0);
+          rest = rest.subarray(2 + sLen);
+        }
+        if ((header.flags ?? 0) & FLAG_REQUEST_ID) {
+          const iLen = ((rest[0] ?? 0) << 8) | (rest[1] ?? 0);
+          rest = rest.subarray(2 + iLen);
+        }
+        server.sendFrame(MsgTypeResponse, header.seq, payloadFor(op, rest));
       };
     },
     notify(op, payload) {

@@ -34,6 +34,10 @@ export interface ChannelSettings {
   /** 会话凭据提供者（Session 对象装配；业务层亦可自给）：无连接传输
    * （UDP/KCP）的请求帧据此自动携带会话槽（frame.FLAG_SESSION）。 */
   sessionToken: (() => string) | null;
+  /** 调试日志实现（WithLog* Option；undefined + logOff=false = 默认 error 级 stderr）。 */
+  logger?: SDKLogger;
+  /** WithLogSilence：完全静默（显式关闭默认 error 输出）。 */
+  logOff?: boolean;
 }
 
 /** 通道级函数式配置项。 */
@@ -61,6 +65,10 @@ export function defaultSettings(): ChannelSettings {
 export function applyOptions(opts: readonly Option[]): ChannelSettings {
   const s = defaultSettings();
   for (const o of opts) o(s);
+  // 未显式设置日志且未静默：默认 error 级 stderr（异常可见；收发打点是 debug 级，静默）。
+  if (s.logger === undefined && !s.logOff) {
+    s.logger = newStderrLogger('error');
+  }
   return s;
 }
 
@@ -146,6 +154,10 @@ export function WithSessionTokenProvider(fn: () => string): Option {
 /** per-call 覆盖项。 */
 export interface InvokeOptions {
   failFast: boolean;
+  /** 幂等键：显式指定（跨重试语义由调用方保证，如以订单号为键）；undefined = 自动生成。 */
+  idempotencyKey?: string;
+  /** 显式逃生门：本次不携带幂等键（服务端即使注解声明了幂等也收到空 ID 诚实不去重）。 */
+  noIdempotency?: boolean;
   timeoutMs?: number;
 }
 
@@ -157,9 +169,103 @@ export function WithFailFast(): InvokeOption {
   };
 }
 
+/** WithIdempotencyKey 显式指定本次调用的幂等键（覆盖自动生成）：同一键的重发/重试
+ * 在服务端去重窗口内不重复产生副作用——适合按业务实体幂等（如以订单号为键）。
+ * 服务端是否启用去重由接口的 atlas.route.v1 idempotency 注解决定。 */
+export function WithIdempotencyKey(id: string): InvokeOption {
+  return (o) => {
+    o.idempotencyKey = id;
+  };
+}
+
+/** WithNoIdempotency 使本次调用不携带幂等键（逃生门）：高频无副作用调用
+ * （纯轮询/心跳）可省去 ID 生成与帧携带。 */
+export function WithNoIdempotency(): InvokeOption {
+  return (o) => {
+    o.noIdempotency = true;
+  };
+}
+
 /** per-call 超时覆盖（帧输入类高频请求设短超时，登录类慢请求设长超时）。 */
 export function WithRequestTimeout(ms: number): InvokeOption {
   return (o) => {
     o.timeoutMs = ms;
+  };
+}
+
+/** SDK 调试日志等级（数值越大越细；WithLog* Option 与之对应，默认 error）。 */
+export type LogLevel = 'error' | 'warn' | 'info' | 'debug' | 'silence';
+
+/** SDKLogger 是调试日志输出接口（内置 stderr 实现或调用方自带实现）。 */
+export interface SDKLogger {
+  debugf(format: string, ...args: unknown[]): void;
+  infof(format: string, ...args: unknown[]): void;
+  warnf(format: string, ...args: unknown[]): void;
+  errorf(format: string, ...args: unknown[]): void;
+}
+
+const LOG_LEVEL_ORDER: Record<LogLevel, number> = {
+  silence: -1,
+  error: 1,
+  warn: 2,
+  info: 3,
+  debug: 4,
+};
+
+/** 内置 stderr 日志器：按最小级别过滤（时间戳 + 级别前缀，零外部依赖）。 */
+export function newStderrLogger(min: LogLevel): SDKLogger {
+  const minOrder = LOG_LEVEL_ORDER[min];
+  const fmt = (lv: Exclude<LogLevel, 'silence'>, msg: string): void => {
+    if (LOG_LEVEL_ORDER[lv] < minOrder) return;
+    console.error(`[atlas-sdk ${lv}] ${new Date().toISOString()} ${msg}`);
+  };
+  return {
+    debugf: (m, ...a) => fmt('debug', `${m} ${a.map(String).join(' ')}`),
+    infof: (m, ...a) => fmt('info', `${m} ${a.map(String).join(' ')}`),
+    warnf: (m, ...a) => fmt('warn', `${m} ${a.map(String).join(' ')}`),
+    errorf: (m, ...a) => fmt('error', `${m} ${a.map(String).join(' ')}`),
+  };
+}
+
+/** WithLogSilence 完全关闭 SDK 调试日志。 */
+export function WithLogSilence(): Option {
+  return (s) => {
+    s.logger = undefined;
+    s.logOff = true;
+  };
+}
+
+/** WithLogError 只打印 Error（与不设置等价的显式写法）。 */
+export function WithLogError(): Option {
+  return (s) => {
+    s.logger = newStderrLogger('error');
+  };
+}
+
+/** WithLogWarn 打印 Warn 及以上（含超时/重发）。 */
+export function WithLogWarn(): Option {
+  return (s) => {
+    s.logger = newStderrLogger('warn');
+  };
+}
+
+/** WithLogInfo 打印 Info 及以上（含连接事件）。 */
+export function WithLogInfo(): Option {
+  return (s) => {
+    s.logger = newStderrLogger('info');
+  };
+}
+
+/** WithLogDebug 打印 Debug 及以上（全开：每次收发的请求/响应 JSON、seq、幂等键）。 */
+export function WithLogDebug(): Option {
+  return (s) => {
+    s.logger = newStderrLogger('debug');
+  };
+}
+
+/** WithLogOutput 注入调用方自带的日志实现（等级由实现自身决定；panic 安全由调用方保证）。 */
+export function WithLogOutput(l: SDKLogger): Option {
+  return (s) => {
+    s.logger = l;
   };
 }

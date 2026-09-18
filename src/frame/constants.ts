@@ -52,8 +52,17 @@ export interface Header {
  * 仅无连接传输（UDP/KCP）的请求帧置位；长连接按连接绑定身份、不置位。 */
 export const FLAG_SESSION = 0x01;
 
-/** 帧 flags 保留位掩码（bit1–7）：未知位即协议非法（服务端 Header.Check 同款）。 */
-export const FLAG_RESERVED_MASK = 0xfe;
+/** 帧 flags 位图 bit1：请求帧 body 携带请求幂等键段（requestIDLen + requestID，
+ * 紧随会话槽之后、payload 之前）。客户端重试/重发复用同一 ID；服务端按
+ * atlas.route.v1 注解决定是否注入投递去重键。 */
+export const FLAG_REQUEST_ID = 0x02;
+
+/** 帧 flags 保留位掩码（bit2–7）：未知位即协议非法（服务端 Header.Check 同款）。
+ * bit0/bit1 已定义，掩码随协议演进收缩。 */
+export const FLAG_RESERVED_MASK = 0xfc;
+
+/** 请求幂等键最大长度（字节，与服务端引擎解析上限对齐）。 */
+export const MAX_REQUEST_ID_LEN = 128;
 
 /** 序列化器的可选扩展接口（载荷编码版本声明，规范 §3.1 载荷编码协商）：
  * client.Serializer 的实现者（如将来的 @bufbuild/protobuf 序列化器）可选择

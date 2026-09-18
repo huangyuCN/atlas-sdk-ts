@@ -61,7 +61,13 @@ describe('载荷编码 ver 分派（规范 §3.1 载荷编码协商）', () => {
         expect(header.version).toBe(VERSION_2);
         const opLen = ((body[0] ?? 0) << 8) | (body[1] ?? 0);
         expect(new TextDecoder().decode(body.subarray(2, 2 + opLen))).toBe('/test.v1.T/Echo');
-        const req = parsePbString(body.subarray(2 + opLen));
+        // 请求幂等键段（flags bit1）在 payload 之前：按置位跳过再取 payload
+        let rest = body.subarray(2 + opLen);
+        if ((header.flags ?? 0) & 0x02) {
+          const iLen = ((rest[0] ?? 0) << 8) | (rest[1] ?? 0);
+          rest = rest.subarray(2 + iLen);
+        }
+        const req = parsePbString(rest);
         // 服务端按请求 ver 分派 codec 解码后回 ver=2 帧（对称回显语义；对齐
         // Go fakeServer.replyVer = Version2 的打样钩子）。
         server.sendFrame(2, header.seq, buildReplyOK(pbString(`pong-${req}`)), VERSION_2);
@@ -83,7 +89,12 @@ describe('载荷编码 ver 分派（规范 §3.1 载荷编码协商）', () => {
       server.onFrame((header, body) => {
         if (header.type !== 1) return;
         const opLen = ((body[0] ?? 0) << 8) | (body[1] ?? 0);
-        const req = parsePbString(body.subarray(2 + opLen));
+        let rest = body.subarray(2 + opLen);
+        if ((header.flags ?? 0) & 0x02) {
+          const iLen = ((rest[0] ?? 0) << 8) | (rest[1] ?? 0);
+          rest = rest.subarray(2 + iLen);
+        }
+        const req = parsePbString(rest);
         void req;
         // 服务端违约：客户端载荷编码 ver=2 却回 ver=1（对齐 Go fakeServer.replyVer
         // 缺省 1 的打样钩子）——失步，协议级致命。
@@ -131,7 +142,15 @@ describe('nil req（传输心跳）与 protobuf serializer（评审缺陷修复�
         expect(new TextDecoder().decode(body.subarray(2, 2 + opLen))).toBe(
           '/atlas.internal.Heartbeat/Ping',
         );
-        expect(body.length).toBe(2 + opLen); // 无 payload
+        // 心跳（nil req）不序列化 payload，但仍生成幂等键（invoke 入口统一生成）：
+        // body = opLen+op+requestIDLen+requestID（flags 置位，无 payload）
+        if ((header.flags ?? 0) & 0x02) {
+          let rest = body.subarray(2 + opLen);
+          const iLen = ((rest[0] ?? 0) << 8) | (rest[1] ?? 0);
+          expect(2 + opLen + 2 + iLen).toBe(body.length); // 无 payload
+        } else {
+          expect(body.length).toBe(2 + opLen);
+        }
         server.sendFrame(2, header.seq, buildReplyOK(new Uint8Array(0)), VERSION_2);
       }),
     );

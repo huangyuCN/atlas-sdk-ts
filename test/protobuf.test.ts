@@ -75,7 +75,13 @@ describe('@bufbuild DTO 端到端（ver=2 分派，镜像 Go client/ver_test.go�
         expect(header.version).toBe(VERSION_2); // 服务端侧验证请求帧头声明 ver=2
         const opLen = ((body[0] ?? 0) << 8) | (body[1] ?? 0);
         expect(new TextDecoder().decode(body.subarray(2, 2 + opLen))).toBe('/test.v1.T/Echo');
-        const req = parseStringValue(body.subarray(2 + opLen)); // 服务端按帧头 ver 分派 codec
+        // 请求幂等键段（flags bit1）在 payload 之前：按置位跳过再取 payload
+        let rest = body.subarray(2 + opLen);
+        if ((header.flags ?? 0) & 0x02) {
+          const iLen = ((rest[0] ?? 0) << 8) | (rest[1] ?? 0);
+          rest = rest.subarray(2 + iLen);
+        }
+        const req = parseStringValue(rest); // 服务端按帧头 ver 分派 codec
         // 对称回显：响应沿用与请求相同的 ver（规范 §3.1），data 为 protobuf wire 字节
         server.sendFrame(2, header.seq, buildReplyOK(buildStringValue(`pong-${req}`)), VERSION_2);
       }),
@@ -101,7 +107,12 @@ describe('@bufbuild DTO 端到端（ver=2 分派，镜像 Go client/ver_test.go�
       server.onFrame((header, body) => {
         if (header.type !== 1) return;
         const opLen = ((body[0] ?? 0) << 8) | (body[1] ?? 0);
-        void parseStringValue(body.subarray(2 + opLen));
+        let rest = body.subarray(2 + opLen);
+        if ((header.flags ?? 0) & 0x02) {
+          const iLen = ((rest[0] ?? 0) << 8) | (rest[1] ?? 0);
+          rest = rest.subarray(2 + iLen);
+        }
+        void parseStringValue(rest);
         // 服务端违约：客户端载荷编码 ver=2 却回 ver=1（对齐 Go fakeServer.replyVer
         // 缺省 1 的打样钩子）——失步，协议级致命（校验先于包络解码，payload 无关）。
         server.sendFrame(2, header.seq, buildReplyOK(buildStringValue('x')), VERSION);

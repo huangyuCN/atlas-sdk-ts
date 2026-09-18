@@ -5,8 +5,8 @@
 // 状态机：disconnected → connecting → connected ⇄ reconnecting（协议错误终止回
 // disconnected 且不重连）。重连编排（supervisor）与心跳循环在 reconnect.ts /
 // heartbeat.ts 中作为协作模块实现，通过本类暴露的内部协作方法交互。
-import { buildRequestBody, buildRequestBodyWithSession } from '../frame/body.js';
-import { FLAG_SESSION } from '../frame/constants.js';
+import { buildRequestBodyFull } from '../frame/body.js';
+import { FLAG_REQUEST_ID, FLAG_SESSION } from '../frame/constants.js';
 import type { Status } from '../frame/status.js';
 import { BusinessError, NetworkError, ProtocolError, TimeoutError } from './errors.js';
 import { NotifyRegistry, type NotifyHandler } from './notify.js';
@@ -17,6 +17,7 @@ import {
   type Option,
 } from './options.js';
 import { serializerVersion } from './serializer.js';
+import type { SDKLogger } from './options.js';
 import type { ChannelTransport, DialConfig, TransportDialer } from './transport.js';
 
 /** 通道角色：业务 / 战斗（dual 形态）。 */
@@ -60,6 +61,8 @@ interface QueuedRequest {
   op: string;
   req: unknown;
   io: InvokeOptions;
+  /** 幂等键：invoke 入口一次决定，drain 重发复用同一 ID（服务端去重窗口内不重复执行）。 */
+  requestId: string;
   resolve: (v: unknown) => void;
   reject: (e: unknown) => void;
   timer: ReturnType<typeof setTimeout>;
@@ -83,6 +86,7 @@ export class Channel {
   readonly kind: Kind;
   readonly dialConfig: DialConfig;
   readonly settings: ReturnType<typeof applyOptions>;
+  private readonly logger: SDKLogger | undefined;
   readonly dialer: TransportDialer;
   /** 载荷编码版本（由 serializer 推导：实现了 frame.Versioned 者用声明值，默认
    * ver=1）；写帧时填帧头 version，响应帧校验与之比对（规范 §3.1 载荷编码协商）。
@@ -133,6 +137,7 @@ export class Channel {
     this.dialConfig = args.dialConfig;
     this.dialer = args.dialer;
     this.settings = applyOptions(args.opts);
+    this.logger = this.settings.logger;
     this.ver = serializerVersion(this.settings.serializer);
     this.frameSessionSlot = args.dialConfig.kind === 'udp' || args.dialConfig.kind === 'kcp';
   }
@@ -172,25 +177,31 @@ export class Channel {
     if (this._closed) throw new NetworkError('客户端已关闭');
     const io: InvokeOptions = { failFast: false };
     for (const o of invokeOpts) o(io);
+    // 幂等键在入口一次决定：重发（drain 重投）复用同一 ID（服务端按
+    // (pid, request_id) 去重窗口保证不重复产生副作用；逃生门见
+    // WithIdempotencyKey/WithNoIdempotency）。
+    const requestId = io.noIdempotency
+      ? ''
+      : io.idempotencyKey ?? newRequestId();
     // hookBypass 直通窗口（钩子同步执行期间）：钩子的重登/重绑请求与传输心跳
     // 不排队（队列要等钩子成功后才 drain）；已文档化的取舍：窗口内外部并发调用
     // 同样直通当前代连接（无法按调用方区分），窗口上限 = hookTimeout。
-    if (this.hookBypass) return this.invokeOnce(op, req, io);
+    if (this.hookBypass) return this.invokeOnce(op, req, io, requestId);
     if (io.failFast) {
       if (this._state !== 'connected') {
         throw new NetworkError(`未连接（${this._state}），failFast 拒绝`);
       }
-      return this.invokeOnce(op, req, io);
+      return this.invokeOnce(op, req, io, requestId);
     }
     // 排队判定与入队在同一同步块（单线程原子，与 drain 互斥）；drain 进行中
     // 的新请求同样入队，保持「排队请求严格先于新请求」的 FIFO。
     if (this.draining || this._state !== 'connected') {
-      return this.enqueue(op, req, io);
+      return this.enqueue(op, req, io, requestId);
     }
-    return this.invokeOnce(op, req, io);
+    return this.invokeOnce(op, req, io, requestId);
   }
 
-  private async invokeOnce(op: string, req: unknown, io: InvokeOptions): Promise<unknown> {
+  private async invokeOnce(op: string, req: unknown, io: InvokeOptions, requestId = ''): Promise<unknown> {
     if (this._closed) throw new NetworkError('客户端已关闭');
     // Reconnecting 期间不写帧：死连接的写可能进内核缓冲后无响应、等待完整超时。
     // 例外：hookBypass（钩子的重登请求正是为建立会话，必须直通当前代连接）。
@@ -211,19 +222,20 @@ export class Channel {
     // 供服务端按帧验证身份（匿名帧不置位）；长连接（TCP/WS）按连接绑定，
     // 不置位、body 无会话字段（与 Go invokeOnce 同构）。
     let flags = 0;
-    let body: Uint8Array;
-    const sessionToken = this.settings.sessionToken;
-    if (this.frameSessionSlot && sessionToken) {
-      const token = sessionToken();
+    let slotToken = '';
+    const sessionTokenFn = this.settings.sessionToken;
+    if (this.frameSessionSlot && sessionTokenFn) {
+      const token = sessionTokenFn();
       if (token !== '') {
-        flags = FLAG_SESSION;
-        body = buildRequestBodyWithSession(op, token, payload);
-      } else {
-        body = buildRequestBody(op, payload);
+        flags |= FLAG_SESSION;
+        slotToken = token;
       }
-    } else {
-      body = buildRequestBody(op, payload);
     }
+    if (requestId !== '') {
+      flags |= FLAG_REQUEST_ID;
+    }
+    const body = buildRequestBodyFull(op, slotToken, requestId, payload);
+    this.logger?.debugf('send op=%s seq=%d id=%s req=%s', op, seq, requestId, snippet(payload));
     const timeoutMs = io.timeoutMs ?? this.settings.invokeTimeoutMs;
     const key = `${gen.epoch}:${seq}`;
     const outcome = await new Promise<PendingOutcome>((resolve, reject) => {
@@ -246,7 +258,7 @@ export class Channel {
         // 评审缺陷修复：encodeFrame 抛的本地协议错误（如 body 超限——配置问题）
         // 不得误分类为 NetworkError（否则触发无意义重连）；保留其 ProtocolError
         // 身份，其余错误包 NetworkError。
-        const e = err instanceof ProtocolError ? err : new NetworkError('发送失败', err);
+        const e = err instanceof ProtocolError ? err : new NetworkError('发送失败: ' + (err instanceof Error ? err.message : String(err)), err);
         this.settleInflight(key, { kind: 'error', error: e });
       });
     });
@@ -259,16 +271,17 @@ export class Channel {
       );
     }
     if (outcome.kind === 'error') throw outcome.error;
+    this.logger?.debugf('recv op=%s seq=%d resp=%s', op, seq, snippet(outcome.data));
     return this.settings.serializer.unmarshal(outcome.data, null);
   }
 
-  private enqueue(op: string, req: unknown, io: InvokeOptions): Promise<unknown> {
+  private enqueue(op: string, req: unknown, io: InvokeOptions, requestId: string): Promise<unknown> {
     if (this.queue.length >= this.settings.reconnectQueueSize) {
       return Promise.reject(new NetworkError('重连排队已满'));
     }
     const timeoutMs = io.timeoutMs ?? this.settings.invokeTimeoutMs;
     return new Promise<unknown>((resolve, reject) => {
-      const item: QueuedRequest = { op, req, io, resolve, reject, timer: null as never };
+      const item: QueuedRequest = { op, req, io, requestId, resolve, reject, timer: null as never };
       item.timer = setTimeout(() => {
         const idx = this.queue.indexOf(item);
         if (idx >= 0) this.queue.splice(idx, 1);
@@ -288,7 +301,7 @@ export class Channel {
         if (!item) break;
         clearTimeout(item.timer);
         try {
-          item.resolve(await this.invokeOnce(item.op, item.req, item.io));
+          item.resolve(await this.invokeOnce(item.op, item.req, item.io, item.requestId));
         } catch (err) {
           item.reject(err);
         }
@@ -474,3 +487,23 @@ export class Channel {
   }
 }
 
+/** newRequestId 生成请求幂等键（crypto.getRandomValues 12 字节 base64url；零外部依赖）。 */
+function newRequestId(): string {
+  const b = new Uint8Array(12);
+  crypto.getRandomValues(b);
+  return base64UrlEncode(b);
+}
+
+/** base64UrlEncode 无 padding 的 URL-safe base64 编码。 */
+function base64UrlEncode(b: Uint8Array): string {
+  let bin = '';
+  for (const x of b) bin += String.fromCharCode(x);
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+/** snippet 取 payload 调试摘要（Debug 日志用：完整 JSON 截断 512 字节，防日志爆炸）。 */
+function snippet(data: Uint8Array): string {
+  if (data.length === 0) return '{}';
+  const text = new TextDecoder('utf-8', { fatal: false }).decode(data);
+  return text.length > 512 ? text.slice(0, 512) + '...(truncated)' : text;
+}
