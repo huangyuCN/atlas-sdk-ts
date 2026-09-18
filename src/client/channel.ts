@@ -235,7 +235,7 @@ export class Channel {
       flags |= FLAG_REQUEST_ID;
     }
     const body = buildRequestBodyFull(op, slotToken, requestId, payload);
-    this.logger?.debugf('send op=%s seq=%d id=%s req=%s', op, seq, requestId, snippet(payload));
+    this.logger?.debugf('send op=%s seq=%s id=%s req=%s', op, seq, requestId, snippet(payload));
     const timeoutMs = io.timeoutMs ?? this.settings.invokeTimeoutMs;
     const key = `${gen.epoch}:${seq}`;
     const outcome = await new Promise<PendingOutcome>((resolve, reject) => {
@@ -271,7 +271,7 @@ export class Channel {
       );
     }
     if (outcome.kind === 'error') throw outcome.error;
-    this.logger?.debugf('recv op=%s seq=%d resp=%s', op, seq, snippet(outcome.data));
+    this.logger?.debugf('recv op=%s seq=%s resp=%s', op, seq, snippet(outcome.data));
     return this.settings.serializer.unmarshal(outcome.data, null);
   }
 
