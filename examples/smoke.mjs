@@ -27,10 +27,12 @@ import { ProtobufSerializer } from '../dist/protobuf.js';
 import { registry, schemas, newMsg, fromPb } from './gatewayv1.mjs';
 
 // ---- 协议常量与 DTO（与模板 api/gateway/v1 一致；正式 DTO 由 atlas sdk gen 生成）----
-const opRegister = '/gateway.v1.GatewayAuth/Register';
-const opLogin = '/gateway.v1.GatewayAuth/Login';
-const opHeartbeat = '/gateway.v1.GatewayAuth/Heartbeat';
-const opJoinBattle = '/gateway.v1.GatewayBattle/JoinBattle';
+// op 与模板 api/gateway/v1（Session 服务）+ api/battle/v1（BattleService）对齐
+//（会话即身份重构后的统一契约：透传路由表由注解生成，客户端 op 即 service/rpc 全名）。
+const opRegister = '/gateway.v1.Session/Register';
+const opLogin = '/gateway.v1.Session/Login';
+const opHeartbeat = '/gateway.v1.Session/Heartbeat';
+const opJoinBattle = '/battle.v1.BattleService/JoinBattle';
 const SMOKE_PASSWORD = 'pw-123456';
 
 

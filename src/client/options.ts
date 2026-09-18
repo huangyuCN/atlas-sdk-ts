@@ -220,10 +220,10 @@ export function newStderrLogger(min: LogLevel): SDKLogger {
     console.error(`[atlas-sdk ${lv}] ${new Date().toISOString()} ${msg}`);
   };
   return {
-    debugf: (m, ...a) => fmt('debug', `${m} ${a.map(String).join(' ')}`),
-    infof: (m, ...a) => fmt('info', `${m} ${a.map(String).join(' ')}`),
-    warnf: (m, ...a) => fmt('warn', `${m} ${a.map(String).join(' ')}`),
-    errorf: (m, ...a) => fmt('error', `${m} ${a.map(String).join(' ')}`),
+    debugf: (m, ...a) => fmt('debug', interpolate(m, a)),
+    infof: (m, ...a) => fmt('info', interpolate(m, a)),
+    warnf: (m, ...a) => fmt('warn', interpolate(m, a)),
+    errorf: (m, ...a) => fmt('error', interpolate(m, a)),
   };
 }
 
@@ -268,4 +268,12 @@ export function WithLogOutput(l: SDKLogger): Option {
   return (s) => {
     s.logger = l;
   };
+}
+
+/** interpolate 依序替换 format 串中的 %s 占位（多余参数以空格续接）。 */
+function interpolate(m: string, args: unknown[]): string {
+  let i = 0;
+  let out = m.replace(/%s/g, () => (i < args.length ? String(args[i++]) : '%s'));
+  while (i < args.length) out += ' ' + String(args[i++]);
+  return out;
 }
