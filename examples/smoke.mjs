@@ -47,7 +47,7 @@ const tcpAddr = arg('tcp', '127.0.0.1:9001');
 const wsAddr = arg('ws', '127.0.0.1:9002');
 const reconnectAfter = Number(arg('reconnect-after', '0'));
 const serializer = arg('serializer', 'json'); // json | protobuf
-const account = arg('account', 'smoke-' + Date.now());
+let account = arg('account', 'smoke-' + Date.now());
 
 // ---- DTO 工厂：按 -serializer 模式返回 plain object（json）或 @bufbuild message（protobuf）----
 const isProtobuf = serializer === 'protobuf';
@@ -129,10 +129,23 @@ const reloginHook = (done) =>
   });
 
 async function registerAndLogin() {
-  const reg = await client.invoke(
-    opRegister,
-    mkReq('RegisterRequest', { account, password: SMOKE_PASSWORD, nickname: '冒烟玩家' }),
-  );
+  // 注册撞号重试（重复执行 smoke 的时间戳账号可能已被上一轮占用；换号再试）。
+  let reg;
+  for (let i = 0; ; i++) {
+    try {
+      reg = await client.invoke(
+        opRegister,
+        mkReq('RegisterRequest', { account, password: SMOKE_PASSWORD, nickname: '冒烟玩家' }),
+      );
+      break;
+    } catch (err) {
+      if (isBusinessError(err) && err.reason === 'PLAYER_ALREADY_EXISTS' && i < 5) {
+        account = account.replace(/-r?\d+$/, '') + '-r' + Math.floor(Math.random() * 100000);
+        continue;
+      }
+      throw err;
+    }
+  }
   state.player = respVal('RegisterReply', reg, 'playerId');
   log('注册成功 playerId=' + state.player);
   const rep = await client.invoke(
