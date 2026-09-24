@@ -1,6 +1,7 @@
 // atlas errors.Status 的客户端侧还原：手写 protobuf wire 解码（字段号见
 // atlas errors/errors.proto：code=1 int32 varint、reason=2 string、message=3 string、
-// metadata=4 map<string,string>，每个 entry 为嵌套 message：key=1、value=2）。
+// metadata=4 map<string,string>，每个 entry 为嵌套 message：key=1、value=2、
+// class=5 int32 varint）。
 // 手写解码避免引入完整 protobuf 运行时（规范 §3.1：错误 Status 是唯一例外）。
 // 字段字符串的 UTF-8 解码走协议层自带实现（引擎宿主兼容加固，严格模式）。
 import { ProtocolError } from './protocolError.js';
@@ -12,6 +13,9 @@ export interface Status {
   code: number;
   reason: string;
   message: string;
+  /** 错误分类（服务端 Status.class：0 = 未分类，1/2/3 = 业务/运行时/取消；
+   * 字段名 class 是 JS 保留字，SDK 侧对内属性名沿用 class、对外错误类型取 errorClass）。 */
+  class: number;
   metadata?: Record<string, string>;
 }
 
@@ -22,14 +26,14 @@ const WIRE_BYTES = 2;
 /** 解析 Status（未知字段静默跳过，与规范 §6.2 DiscardUnknown 语义对齐）。
  * wire 格式非法（varint 截断/溢出、长度越界、不支持的 wire type）抛 ProtocolError。 */
 export function decodeStatus(b: Uint8Array): Status {
-  const st: Status = { code: 0, reason: '', message: '' };
+  const st: Status = { code: 0, reason: '', message: '', class: 0 };
   // metadata 用无原型对象承载（评审 Fix：普通对象的 __proto__ 键会被原型链
   // 拦截丢失，与 Go map[string]string 语义不符——恶意/特殊 key 不得丢失）。
   const meta: Record<string, string> = Object.create(null) as Record<string, string>;
   let hasMeta = false;
   walkFields(b, (fieldNum, wire, val, num) => {
-    // 已知字段号（1-4）：wire type 必须与声明匹配（与 Go proto.Unmarshal 一致，
-    // 字段号匹配但 wire 不符报错）；未知字段号（>4）：任意合法 wire 静默跳过。
+    // 已知字段号（1-5）：wire type 必须与声明匹配（与 Go proto.Unmarshal 一致，
+    // 字段号匹配但 wire 不符报错）；未知字段号（>5）：任意合法 wire 静默跳过。
     if (fieldNum === 1) {
       if (wire !== WIRE_VARINT) throw new ProtocolError(`frame: Status code 字段 wire type ${wire} 与声明不符`);
       // int32 语义：取低 32 位有符号解释（Go int32(num) 截断同构，如 -1 的补码 varint）。
@@ -51,6 +55,12 @@ export function decodeStatus(b: Uint8Array): Status {
       const entry = decodeMapEntry(val);
       hasMeta = true;
       meta[entry[0]] = entry[1];
+      return;
+    }
+    if (fieldNum === 5) {
+      if (wire !== WIRE_VARINT) throw new ProtocolError(`frame: Status class 字段 wire type ${wire} 与声明不符`);
+      // int32 语义（与 code 同款）：取低 32 位有符号解释。
+      st.class = Number(BigInt.asIntN(32, num));
       return;
     }
     // 其他字段号：静默跳过（含 fixed32/fixed64 等任意合法 wire type）。

@@ -9,4 +9,4 @@ export {
   isBusinessError,
   isProtocolError,
 } from './errors.js';
-export { HeartbeatOperation, HEARTBEAT_FAILURES } from './channel.js';
+export { HeartbeatOperation, HEARTBEAT_FAILURES } from './channelTypes.js';

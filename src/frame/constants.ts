@@ -1,38 +1,61 @@
 /**
- * Atlas 帧协议常量（与服务端 transport/frame 保持一致；规范见 atlas 仓
- * docs/superpowers/specs/2026-08-28-client-sdk-multilang-design.md §2）。
+ * Atlas 帧协议常量（唯一来源：框架仓 transport/frame 的三语言生成物，由
+ * scripts/gen-dto.sh 快照到 src/frame/gen/frame.ts——本文件只做转发，不写字面量；
+ * 规范见 atlas 仓 docs/superpowers/specs/2026-08-28-client-sdk-multilang-design.md §2）。
  *
  * 本包为协议层，零运行时依赖（仅 Web 标准字节 API），浏览器与 Node 双目标共用。
  */
+import {
+  FLAG_REQUEST_I_D,
+  FLAG_SESSION,
+  MAX_OPERATION_LEN as GEN_MAX_OPERATION_LEN,
+  MAX_REQUEST_I_D_LEN as GEN_MAX_REQUEST_ID_LEN,
+  MAX_SESSION_LEN as GEN_MAX_SESSION_LEN,
+  MSG_TYPE_NOTIFY,
+  MSG_TYPE_REQUEST,
+  MSG_TYPE_RESPONSE,
+  VERSION2,
+} from './gen/frame.js';
 
-/** 帧头固定长度（字节）。 */
-export const HEADER_SIZE = 16;
+export {
+  FLAG_SESSION,
+  HEADER_SIZE,
+  MAGIC,
+  MAX_BODY_SIZE,
+  MSG_TYPE_NOTIFY,
+  MSG_TYPE_REQUEST,
+  MSG_TYPE_RESPONSE,
+  VERSION,
+} from './gen/frame.js';
 
-/** 帧协议魔数（"ATLS"）。 */
-export const MAGIC = 0x41544c53;
+/** 载荷编码 ver=2（protobuf 二进制 wire format；生成物名为 VERSION2，本包沿用
+ * 历史导出名 VERSION_2——SDK 内引用符号不变）。可选增强：服务端支持 ver=2 前
+ * 勿在真实连接启用（protojson ver=1 永续支持）。 */
+export const VERSION_2 = VERSION2;
 
-/** 当前默认协议版本（载荷编码 ver=1：protojson JSON，规范 §3.1 载荷编码协商）。 */
-export const VERSION = 1;
+/** 帧 flags 位图 bit1：请求帧 body 携带请求幂等键段（生成物名为 FLAG_REQUEST_I_D，
+ * 本包沿用历史导出名 FLAG_REQUEST_ID——SDK 内引用符号不变）。 */
+export const FLAG_REQUEST_ID = FLAG_REQUEST_I_D;
 
-/** 载荷编码 ver=2（protobuf 二进制 wire format；规范 §3.1 载荷编码协商，
- * 2026-09-04 v0.5 设计决策）。可选增强：服务端支持 ver=2 前勿在真实连接启用
- * （protojson ver=1 永续支持）。 */
-export const VERSION_2 = 2;
+/** operation 名独立上限（防垃圾字符串耗内存；唯一来源是生成物，本处只做转发）。 */
+export const MAX_OPERATION_LEN = GEN_MAX_OPERATION_LEN;
 
-/** 单帧 body 绝对上限（2MiB，与服务端 frame.MaxBodySize 对齐；可配但两端必须对齐）。 */
-export const MAX_BODY_SIZE = 2 * 1024 * 1024;
+/** 会话槽（会话凭据）最大长度（字节；唯一来源是生成物，本处只做转发）。 */
+export const MAX_SESSION_LEN = GEN_MAX_SESSION_LEN;
 
-/** operation 名独立上限（服务端 dispatch 同款，防垃圾字符串耗内存）。 */
-export const MAX_OPERATION_LEN = 4096;
+/** 帧 flags 保留位掩码：已定义位（bit0 会话槽 / bit1 幂等键）之外皆非法。
+ * 由生成物位定义推导（不写字面量），掩码随协议演进自动收缩。 */
+export const FLAG_RESERVED_MASK = ~(FLAG_SESSION | FLAG_REQUEST_ID) & 0xff;
 
-/** 会话槽（会话凭据）最大长度（字节）。 */
-export const MAX_SESSION_LEN = 256;
+/** 请求幂等键最大长度（字节；生成物名为 MAX_REQUEST_I_D_LEN，本包沿用历史
+ * 导出名 MAX_REQUEST_ID_LEN——SDK 内引用符号不变）。 */
+export const MAX_REQUEST_ID_LEN = GEN_MAX_REQUEST_ID_LEN;
 
 /** 帧类型：请求（1）/ 响应（2）/ 服务端推送（3，不参与请求匹配）。 */
 export const MsgType = {
-  Request: 1,
-  Response: 2,
-  Notify: 3,
+  Request: MSG_TYPE_REQUEST,
+  Response: MSG_TYPE_RESPONSE,
+  Notify: MSG_TYPE_NOTIFY,
 } as const;
 
 export type MsgType = (typeof MsgType)[keyof typeof MsgType];
@@ -47,22 +70,6 @@ export interface Header {
   seq: number;
   length: number;
 }
-
-/** 帧 flags 位图 bit0：请求帧 body 携带会话槽（sessionLen + session + payload）。
- * 仅无连接传输（UDP/KCP）的请求帧置位；长连接按连接绑定身份、不置位。 */
-export const FLAG_SESSION = 0x01;
-
-/** 帧 flags 位图 bit1：请求帧 body 携带请求幂等键段（requestIDLen + requestID，
- * 紧随会话槽之后、payload 之前）。客户端重试/重发复用同一 ID；服务端按
- * atlas.route.v1 注解决定是否注入投递去重键。 */
-export const FLAG_REQUEST_ID = 0x02;
-
-/** 帧 flags 保留位掩码（bit2–7）：未知位即协议非法（服务端 Header.Check 同款）。
- * bit0/bit1 已定义，掩码随协议演进收缩。 */
-export const FLAG_RESERVED_MASK = 0xfc;
-
-/** 请求幂等键最大长度（字节，与服务端引擎解析上限对齐）。 */
-export const MAX_REQUEST_ID_LEN = 128;
 
 /** 序列化器的可选扩展接口（载荷编码版本声明，规范 §3.1 载荷编码协商）：
  * client.Serializer 的实现者（如将来的 @bufbuild/protobuf 序列化器）可选择

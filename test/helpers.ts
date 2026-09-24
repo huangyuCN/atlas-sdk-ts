@@ -5,7 +5,22 @@ import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect } from 'vitest';
+import { create, fromBinary, toBinary } from '@bufbuild/protobuf';
 import { ProtocolError, type Status } from '../src/frame/index.js';
+import type { PushEnvelope, SessionProtocol } from '../src/client/sessionProtocol.js';
+import {
+  SessionProtocolOps,
+  sessionPlayerID,
+  sessionPushOps,
+  sessionToken,
+  sessionExpiresAt,
+  type KickedNotify,
+} from '../src/gen/api/gateway/v1/opclient/session_pb.js';
+import {
+  KickedNotifySchema,
+  KickedReason,
+  KickedReasonSchema,
+} from '../examples/gen/api/gateway/v1/session_pb.js';
 import {
   createMockTransport,
   type ChannelTransport,
@@ -176,12 +191,14 @@ export function appendBytesField(dst: number[], fieldNum: number, value: Uint8Ar
   dst.push(...value);
 }
 
-/** 手写编码 Status protobuf（字段号 1/2/3/4，与 atlas errors/errors.proto 对齐）。 */
+/** 手写编码 Status protobuf（字段号 1/2/3/4/5，与 atlas errors/errors.proto 对齐；
+ * errorClass=0（未分类）时不写字段，与 Go proto 零值省略一致）。 */
 export function buildTestStatus(
   code: number,
   reason: string,
   message: string,
   metadata: Record<string, string> | null,
+  errorClass = 0,
 ): Uint8Array {
   const out: number[] = [];
   if (code !== 0) {
@@ -198,6 +215,7 @@ export function buildTestStatus(
       appendBytesField(out, 4, Uint8Array.from(entry));
     }
   }
+  if (errorClass !== 0) appendVarintField(out, 5, BigInt.asUintN(64, BigInt(errorClass)));
   return Uint8Array.from(out);
 }
 
@@ -209,6 +227,8 @@ export function assertStatusMatches(actual: Status, want: Record<string, unknown
   if (typeof reason === 'string') expect(actual.reason).toBe(reason);
   const message = want['message'];
   if (typeof message === 'string') expect(actual.message).toBe(message);
+  const errorClass = want['class'];
+  if (typeof errorClass === 'number') expect(actual.class).toBe(errorClass);
   const meta = want['metadata'];
   if (meta !== null && meta !== undefined && typeof meta === 'object') {
     const entries = Object.entries(meta as Record<string, unknown>);
@@ -249,4 +269,55 @@ export async function waitFor(cond: () => boolean, timeoutMs = 2000): Promise<vo
     if (Date.now() - start > timeoutMs) throw new Error('waitFor 超时');
     await new Promise((r) => setTimeout(r, 5));
   }
+}
+
+// ---- 会话协议接缝的「项目侧参考实现」 ----
+
+/** gatewayV1Protocol 用模板生成的会话 stub 素材组装接缝——项目侧真实接入即此形态：
+ * 5 个 op 名与 3 个解码钩子全部来自生成物（src/gen/api/gateway/v1/opclient/session_pb.ts 快照），
+ * SDK 内核不含任何会话消息类型字面量。被挤下线推送按**推送信封的帧头 version** 选择
+ * 解码器（1 = protojson 字节、2 = protobuf wire 字节）——与 examples/gatewayv1.mjs 的
+ * 项目侧参考实现同构。 */
+export function gatewayV1Protocol(): SessionProtocol {
+  return {
+    ops: () => SessionProtocolOps,
+    token: (msg) => sessionToken(msg),
+    playerID: (msg) => sessionPlayerID(msg),
+    expiresAt: (msg) => sessionExpiresAt(msg),
+    kicked: (op, env) => {
+      if (op !== sessionPushOps.kickedNotify) return { reason: '', ok: false };
+      return { reason: kickedReasonOf(env), ok: true };
+    },
+  };
+}
+
+/** newKickedBody 用 ver=2（protobuf wire）编码一条被挤下线推送载荷（测试用）。 */
+export function newKickedBody(reason: KickedReason): Uint8Array {
+  return toBinary(KickedNotifySchema, create(KickedNotifySchema, { reason }));
+}
+
+/** kickedReasonOf 按推送信封的帧头 version 选择解码器并归一为「枚举名」语义：
+ * ver=1（protojson）本就是枚举名；ver=2（protobuf wire）解出枚举数值，经 enum schema
+ * 还原为枚举名。未知 version / 空载荷 / 坏字节一律返回空串且**不抛错**（接缝对异常
+ * 载荷安全：「识别为被挤下线但取不到原因」）。 */
+function kickedReasonOf(env: PushEnvelope): string {
+  if (!(env.body instanceof Uint8Array) || env.body.length === 0) return '';
+  try {
+    if (env.version === 2) {
+      return reasonName(fromBinary(KickedNotifySchema, env.body).reason);
+    }
+    if (env.version === 1) {
+      const parsed = JSON.parse(new TextDecoder().decode(env.body)) as KickedNotify;
+      return parsed.reason ?? '';
+    }
+  } catch {
+    return '';
+  }
+  return ''; // 未知 version：不猜编码，返回「无原因」
+}
+
+/** reasonName 把解码结果规整为枚举名（数值 → proto 枚举名；已是字符串则原样）。 */
+function reasonName(value: unknown): string {
+  if (typeof value !== 'number') return typeof value === 'string' ? value : '';
+  return KickedReasonSchema.values.find((v) => v.number === value)?.name ?? '';
 }

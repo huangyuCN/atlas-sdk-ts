@@ -24,8 +24,8 @@ jobs:
         run: |
           if [ "$TOKEN_SET" != "true" ]; then
             echo "::error::secrets.ATLAS_CI_TOKEN 未配置：atlas 主仓为私有仓，CI 检出需要只读 PAT。"
-            echo "::error::GitHub → Settings → Developer settings → Fine-grained tokens 新建（仅 atlas 仓，Contents: Read）"
-            echo "::error::再到本仓 Settings → Secrets and variables → Actions 添加 ATLAS_CI_TOKEN，然后 Re-run 本工作流。"
+            echo "::error::GitHub → Settings → Developer settings → Fine-grained tokens 新建（atlas 与 atlas-game-layout 两仓，Contents: Read）"
+            echo "::error::再到本仓 Settings → Secrets and variables → Actions 添加 ATLAS_CI_TOKEN（或另配只读模板仓的 ATLAS_LAYOUT_CI_TOKEN），然后 Re-run 本工作流。"
             exit 1
           fi
       - uses: actions/checkout@v4
@@ -34,6 +34,15 @@ jobs:
           ref: feat/actor
           path: atlas
           token: ${{ secrets.ATLAS_CI_TOKEN }}
+      # 模板仓 = 会话协议唯一来源（R13）：descriptor set 与三语言会话 stub 由它导出，
+      # 「重生成无 diff」门禁需要它。目录名必须是 atlas-game-layout——gen-dto.sh 把
+      # 「模板仓目录名 + 仓内相对路径」写进生成物文件头，路径变了产物就会 diff。
+      - uses: actions/checkout@v4
+        with:
+          repository: huangyuCN/atlas-game-layout
+          ref: main
+          path: atlas-game-layout
+          token: ${{ secrets.ATLAS_LAYOUT_CI_TOKEN || secrets.ATLAS_CI_TOKEN }}
       - uses: pnpm/action-setup@v4
         with:
           version: 11
@@ -46,5 +55,22 @@ jobs:
         run: pnpm check
         env:
           ATLAS_GOLDEN_DIR: ${{ github.workspace }}/atlas/testdata/golden
+      # 重生成无 diff 门禁：帧常量（框架生成物）、会话 stub 快照与冒烟 schema
+      # （模板 descriptor set）都必须与入库产物逐字节一致——上游改了协议而本仓
+      # 忘了重跑 gen-dto.sh，在 CI 直接失败。
+      - name: 安装 protoc（descriptor set 与 schema 重生成用）
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: 重生成无 diff 门禁（帧常量 + 会话 stub + 冒烟 schema）
+        run: |
+          bash scripts/gen-dto.sh
+          git diff --exit-code
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "::error::重生成产出了未入库的改动（含新增文件），请本地跑 bash scripts/gen-dto.sh 后提交产物"
+            git status --porcelain
+            exit 1
+          fi
+        env:
+          ATLAS_DIR: ${{ github.workspace }}/atlas
+          ATLAS_LAYOUT_DIR: ${{ github.workspace }}/atlas-game-layout
       - name: 构建（ESM + CJS + d.ts 三形态）
         run: pnpm build

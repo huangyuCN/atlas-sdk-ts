@@ -20,7 +20,7 @@
 //     返回三态结构（TS 惯用法，替代 Go 的值/错误二分）：
 //       incomplete = 需要更多数据（对应 io.EOF/UnexpectedEOF，golden 对拍归 network）；
 //       protocol   = 头校验失败（golden 对拍归 protocol，上层终止连接）。
-import { type Header, HEADER_SIZE, MAX_BODY_SIZE } from './constants.js';
+import { type Header, HEADER_SIZE, MAGIC, MAX_BODY_SIZE, VERSION } from './constants.js';
 import { checkHeader, decodeHeaderAt, encodeHeaderInto } from './header.js';
 import { ProtocolError } from './protocolError.js';
 
@@ -33,8 +33,8 @@ export function encodeFrame(h: Header, body: Uint8Array, maxBodySize = 0): Uint8
   }
   const out = new Uint8Array(HEADER_SIZE + body.length);
   const hdr: Header = {
-    magic: h.magic === 0 ? 0x41544c53 : h.magic,
-    version: h.version === 0 ? 1 : h.version,
+    magic: h.magic === 0 ? MAGIC : h.magic,
+    version: h.version === 0 ? VERSION : h.version,
     type: h.type,
     flags: h.flags,
     seq: h.seq,

@@ -2,7 +2,8 @@
 // 循环读帧 → Response 按代匹配结算 in-flight / Notify 按 operation 分发；
 // 包络非法 = 协议级致命错误（终止本通道，失步连接不可再用）；
 // 退出时回收本代 in-flight（断连统一失败）并触发协议错误终止判定。
-import type { Channel, Generation, PendingOutcome } from './channel.js';
+import type { Channel } from './channel.js';
+import type { Generation, PendingOutcome } from './channelTypes.js';
 import type { Header } from '../frame/constants.js';
 import { decodeReply } from '../frame/reply.js';
 import { parseRequestBody } from '../frame/body.js';
@@ -23,7 +24,7 @@ export function startReadLoop(ch: Channel, gen: Generation): void {
             break;
           }
         } else if (f.header.type === 3) {
-          dispatchNotify(ch, f.body);
+          dispatchNotify(ch, f.header, f.body);
         } else {
           exitErr = new ProtocolError(`收到非法帧类型 ${f.header.type}`);
           break;
@@ -58,12 +59,13 @@ function dispatchResponse(ch: Channel, gen: Generation, hdr: Header, body: Uint8
   return null;
 }
 
-/** Notify 帧：解析 body 的 (operation, payload) 分发到订阅者；坏帧静默丢弃
+/** Notify 帧：解析 body 的 (operation, payload) 分发到订阅者，并带上帧头载荷编码
+ * version（推送载荷非自描述，接缝据此选择解码器——S0.5 修订 1）；坏帧静默丢弃
  * （推送不参与请求匹配，丢失不影响一致性）。 */
-function dispatchNotify(ch: Channel, body: Uint8Array): void {
+function dispatchNotify(ch: Channel, hdr: Header, body: Uint8Array): void {
   try {
     const { operation, payload } = parseRequestBody(body);
-    ch.notifier.dispatch(operation, payload);
+    ch.notifier.dispatch(operation, payload, hdr.version);
   } catch {
     // 静默丢弃
   }

@@ -12,27 +12,39 @@
 // 依赖 dist 产物：先 pnpm build。
 import {
   BusinessError,
+  CLIENT_VERSION,
   HeartbeatOperation,
   isBusinessError,
+  newSession,
   WithBackoff,
   WithHeartbeatInterval,
   WithInvokeTimeout,
   WithOnReconnected,
   WithSerializer,
   WithSessionHeartbeat,
+  WithSessionHeartbeatInterval,
   newWSClient,
+  withSessionProtocol,
 } from '../dist/index.js';
 import { newTCPClient, newUDPClient, newDualClientNode } from '../dist/node.js';
 import { ProtobufSerializer } from '../dist/protobuf.js';
-import { registry, schemas, newMsg, fromPb } from './gatewayv1.mjs';
+import {
+  joinBattleOp,
+  newGatewayV1SessionProtocol,
+  registry,
+  schemas,
+  sessionOps,
+  newMsg,
+  fromPb,
+} from './gatewayv1.mjs';
 
-// ---- 协议常量与 DTO（与模板 api/gateway/v1 一致；正式 DTO 由 atlas sdk gen 生成）----
-// op 与模板 api/gateway/v1（Session 服务）+ api/battle/v1（BattleService）对齐
-//（会话即身份重构后的统一契约：透传路由表由注解生成，客户端 op 即 service/rpc 全名）。
-const opRegister = '/gateway.v1.Session/Register';
-const opLogin = '/gateway.v1.Session/Login';
-const opHeartbeat = '/gateway.v1.Session/Heartbeat';
-const opJoinBattle = '/battle.v1.BattleService/JoinBattle';
+// ---- 协议常量与 DTO ----
+// op 名与 DTO 全部来自模板仓 descriptor set 的生成物（examples/gen/，见
+// scripts/gen-dto.sh）：客户端 op 即 service/rpc 全名，本文件不写字面量。
+// 登录/注册/会话心跳经 Session 接缝发送（op 名由接缝提供），这里只保留手工驱动的
+// 心跳与战斗探针所需的 op。
+const opHeartbeat = sessionOps.heartbeat;
+const opJoinBattle = joinBattleOp;
 const SMOKE_PASSWORD = 'pw-123456';
 
 
@@ -85,6 +97,16 @@ const state = { player: '', token: '' };
 /** 钩子闭包引用的 client（钩子执行时已赋值；钩子内 Invoke 走 hookBypass 直通）。 */
 let client;
 
+/** 会话协议接缝接入（一行）：op 名与凭据提取全部来自模板生成物（examples/gen/）。
+ * 接缝无需知道通道的载荷编码——回执/推送的编码由帧头 version 随信封下发，接缝按
+ * version 选解码器（S0.5 修订 1）。
+ * 本冒烟用 Session 做登录与凭据保管；会话心跳/重登仍按显式 payload 手工驱动
+ * （心跳带 ts 对时字段，与 Go 侧 smoke 同构），故内置心跳周期设 0。 */
+const session = newSession([
+  withSessionProtocol(newGatewayV1SessionProtocol()),
+  WithSessionHeartbeatInterval(0),
+]);
+
 /** 一次性信号（重登/重绑钩子完成通知；钩子多次成功触发时幂等）。 */
 function signal() {
   let resolve;
@@ -118,12 +140,16 @@ const sessionHeartbeatOpt = () =>
 /** 会话重登钩子：失败抛错（SDK 视为本次重连未完成，退避重试）。 */
 const reloginHook = (done) =>
   WithOnReconnected(async () => {
-    const rep = await client.invoke(
-      opLogin,
-      mkReq('LoginRequest', { playerId: state.player, password: SMOKE_PASSWORD }),
+    // 经 Session 登录：客户端版本由 Session 补入（client_version），凭据由接缝提取
+    await session.login(
+      mkReq('LoginRequest', {
+        playerId: state.player,
+        password: SMOKE_PASSWORD,
+        clientVersion: CLIENT_VERSION,
+      }),
     );
-    state.player = respVal('LoginReply', rep, 'playerId');
-    state.token = respVal('LoginReply', rep, 'token');
+    state.player = session.playerId();
+    state.token = session.token();
     log('重连后重登成功（新令牌已存）');
     done();
   });
@@ -133,8 +159,7 @@ async function registerAndLogin() {
   let reg;
   for (let i = 0; ; i++) {
     try {
-      reg = await client.invoke(
-        opRegister,
+      reg = await session.register(
         mkReq('RegisterRequest', { account, password: SMOKE_PASSWORD, nickname: '冒烟玩家' }),
       );
       break;
@@ -148,12 +173,15 @@ async function registerAndLogin() {
   }
   state.player = respVal('RegisterReply', reg, 'playerId');
   log('注册成功 playerId=' + state.player);
-  const rep = await client.invoke(
-    opLogin,
-    mkReq('LoginRequest', { playerId: state.player, password: SMOKE_PASSWORD }),
+  await session.login(
+    mkReq('LoginRequest', {
+      playerId: state.player,
+      password: SMOKE_PASSWORD,
+      clientVersion: CLIENT_VERSION,
+    }),
   );
-  state.player = respVal('LoginReply', rep, 'playerId');
-  state.token = respVal('LoginReply', rep, 'token');
+  state.player = session.playerId();
+  state.token = session.token();
 }
 
 async function businessHeartbeats(n) {
@@ -215,6 +243,7 @@ async function runSingle(dial, form) {
     reloginHook(reloginSignal.done),
     sessionHeartbeatOpt(),
   ]);
+  session.bind(client);
   try {
     await registerAndLogin();
     log(`登录成功 playerId=${state.player} token 已存`);
@@ -237,16 +266,14 @@ async function runBattleChannel(form) {
   try {
     if (!(await probeAlive())) fail(`${form} 通道往返探针失败`);
     log(`${form} 通道往返探针 OK`);
-    // 战斗 payload 编解码验证（protobuf 模式）：发 JoinBattle（伪造 token）——
-    // 服务端按 ver=2 分派 codec 解码后因会话无效回业务拒绝（BusinessError）即
-    // 证明 payload 编解码正确（协议错误/解码失败才说明编解码问题）。
+    // 战斗 payload 编解码验证（protobuf 模式）：未登录的战斗通道直接发 JoinBattle
+    // ——服务端按 ver=2 分派 codec 解码后因会话无效回业务拒绝（BusinessError）即
+    // 证明 payload 编解码正确（协议错误/解码失败才说明编解码问题）。身份由连接/
+    // 帧会话槽承载，消息体无身份字段（battle.v1.JoinBattleReq 只有 battle_id）。
     if (isProtobuf) {
       try {
-        await client.invoke(
-          opJoinBattle,
-          mkReq('JoinBattleRequest', { token: 'no-token', playerId: 'none', battleId: 'b1' }),
-        );
-        fail(`${form} JoinBattle 应被拒绝（伪造 token），却成功`);
+        await client.invoke(opJoinBattle, mkReq('JoinBattleReq', { battleId: 'b1' }));
+        fail(`${form} JoinBattle 应被拒绝（未登录战斗通道），却成功`);
       } catch (err) {
         if (err instanceof BusinessError) {
           log(`${form} JoinBattle 业务拒绝（protobuf 编码解码正确）`);
@@ -303,6 +330,7 @@ async function runDual() {
     },
     commonOpts,
   );
+  session.bind(client);
   try {
     await registerAndLogin();
     log('业务通道登录成功 playerId=' + state.player);

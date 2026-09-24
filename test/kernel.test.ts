@@ -38,13 +38,13 @@ describe('Invoke：请求-响应匹配', () => {
   it('成功往返：请求 payload 与响应解析', async () => {
     const { dialer } = makeDialer((server) =>
       server.autoReply((op, payload) => {
-        expect(op).toBe('/gateway.v1.GatewayAuth/Login');
+        expect(op).toBe('/gateway.v1.Session/Login');
         expect(JSON.parse(new TextDecoder().decode(payload))).toEqual({ playerId: 'p1' });
         return replyOK({ playerId: 'p1', nickname: '阿宇' });
       }),
     );
     const c = await newClient(dialer, { kind: 'memory', addr: 'mock' }, Kind.Business, []);
-    const resp = (await c.invoke('/gateway.v1.GatewayAuth/Login', { playerId: 'p1' })) as {
+    const resp = (await c.invoke('/gateway.v1.Session/Login', { playerId: 'p1' })) as {
       playerId: string;
       nickname: string;
     };
@@ -227,7 +227,7 @@ describe('重连钩子与 hookBypass 直通窗口', () => {
           hookRuns += 1;
           // 钩子内 Invoke：hookBypass 直通当前代连接（重登请求不排队）
           return c
-            .invoke('/gateway.v1.GatewayAuth/Login', { token: 'fresh' })
+            .invoke('/gateway.v1.Session/Login', { token: 'fresh' })
             .then((r) => {
               reloginResp = r;
             });
@@ -314,7 +314,7 @@ describe('双层心跳', () => {
       { kind: 'memory', addr: 'mock' },
       Kind.Business,
       [
-        WithSessionHeartbeat(20, () => ({ op: '/gateway.v1.GatewayAuth/Heartbeat', req: { token: 't' } })),
+        WithSessionHeartbeat(20, () => ({ op: '/gateway.v1.Session/Heartbeat', req: { token: 't' } })),
         WithOnReconnected(() => {
           relogins += 1;
           return undefined;
@@ -323,7 +323,7 @@ describe('双层心跳', () => {
     );
     // 会话心跳被业务拒绝 → 触发重登钩子（单飞：多次拒绝只挂一轮）
     servers[0]!.autoReply((op) => {
-      if (op === '/gateway.v1.GatewayAuth/Heartbeat') return replyErr(401, 'SESSION_EXPIRED');
+      if (op === '/gateway.v1.Session/Heartbeat') return replyErr(401, 'SESSION_EXPIRED');
       return replyOK({});
     });
     await waitFor(() => relogins >= 1, 2000);

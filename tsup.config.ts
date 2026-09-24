@@ -1,4 +1,12 @@
+import { readFileSync } from 'node:fs';
 import { defineConfig } from 'tsup';
+
+// 客户端版本单一来源（src/version.ts 的 __ATLAS_SDK_VERSION__）：构建期从
+// package.json 注入——源码不写版本字面量，避免两处手写漂移（vitest.config.ts
+// 注入同一表达式，源码在测试与产物中行为一致）。
+const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')) as {
+  version: string;
+};
 
 // 产物三形态（规范 §3.2）：ESM + CJS + d.ts。
 // target ES2020：引擎宿主兼容加固（2026-09-01 立项决策）——Cocos Creator 等嵌入式
@@ -15,4 +23,5 @@ export default defineConfig({
   target: 'es2020',
   clean: true,
   sourcemap: true,
+  define: { __ATLAS_SDK_VERSION__: JSON.stringify(pkg.version) },
 });

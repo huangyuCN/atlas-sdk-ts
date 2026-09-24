@@ -1,4 +1,5 @@
 // 配置项：函数式 Option（对齐 Go 侧 Option 模式）。
+import { MAX_BODY_SIZE } from '../frame/constants.js';
 import type { Serializer } from './serializer.js';
 import { defaultSerializer } from './serializer.js';
 
@@ -48,7 +49,7 @@ export function defaultSettings(): ChannelSettings {
   return {
     heartbeatIntervalMs: 30_000,
     invokeTimeoutMs: 10_000,
-    maxBodySize: 2 * 1024 * 1024,
+    maxBodySize: MAX_BODY_SIZE,
     serializer: defaultSerializer,
     autoReconnect: true,
     backoffBaseMs: 500,

@@ -5,9 +5,9 @@
 // 状态机：disconnected → connecting → connected ⇄ reconnecting（协议错误终止回
 // disconnected 且不重连）。重连编排（supervisor）与心跳循环在 reconnect.ts /
 // heartbeat.ts 中作为协作模块实现，通过本类暴露的内部协作方法交互。
+// 类型词汇与常量见 channelTypes.ts，纯函数辅助见 channelUtil.ts。
 import { buildRequestBodyFull } from '../frame/body.js';
-import { FLAG_REQUEST_ID, FLAG_SESSION } from '../frame/constants.js';
-import type { Status } from '../frame/status.js';
+import { FLAG_REQUEST_ID, FLAG_SESSION, MAGIC } from '../frame/constants.js';
 import { BusinessError, NetworkError, ProtocolError, TimeoutError } from './errors.js';
 import { NotifyRegistry, type NotifyHandler } from './notify.js';
 import {
@@ -19,58 +19,16 @@ import {
 import { serializerVersion } from './serializer.js';
 import type { SDKLogger } from './options.js';
 import type { ChannelTransport, DialConfig, TransportDialer } from './transport.js';
-
-/** 通道角色：业务 / 战斗（dual 形态）。 */
-export const Kind = {
-  Business: 'business',
-  Battle: 'battle',
-} as const;
-export type Kind = (typeof Kind)[keyof typeof Kind];
-
-/** 通道连接状态。 */
-export type ChannelState = 'disconnected' | 'connecting' | 'connected' | 'reconnecting';
-
-/** 传输心跳死链判定阈值：连续失败次数（网络类失败才计数，业务拒绝不计）。 */
-export const HEARTBEAT_FAILURES = 3;
-
-/** 传输保活心跳 operation（服务端引擎内置空响应 handler）。 */
-export const HeartbeatOperation = '/atlas.internal.Heartbeat/Ping';
-
-/** 一代连接：每次拨号成功分配一个 Generation；epoch 单调递增隔离新旧代。 */
-export interface Generation {
-  readonly epoch: number;
-  readonly transport: ChannelTransport;
-  /** 读循环退出（连接死亡）时 settle。 */
-  readonly done: Promise<void>;
-  /** 内部：resolve done（onGenerationDead 调用）。 */
-  readonly finish: () => void;
-}
-
-interface PendingEntry {
-  settle: (outcome: PendingOutcome) => void;
-  timer: ReturnType<typeof setTimeout>;
-}
-
-/** @internal 同目录协作模块（readloop）使用；不进公共导出面。 */
-export type PendingOutcome =
-  | { kind: 'data'; data: Uint8Array }
-  | { kind: 'status'; status: Status }
-  | { kind: 'error'; error: AtlasErrorKind };
-
-interface QueuedRequest {
-  op: string;
-  req: unknown;
-  io: InvokeOptions;
-  /** 幂等键：invoke 入口一次决定，drain 重发复用同一 ID（服务端去重窗口内不重复执行）。 */
-  requestId: string;
-  resolve: (v: unknown) => void;
-  reject: (e: unknown) => void;
-  timer: ReturnType<typeof setTimeout>;
-}
-
-type AtlasErrorKind = NetworkError | TimeoutError | ProtocolError;
-
-const MAGIC_DEFAULT = 0x41544c53;
+import { newRequestId, payloadSnippet } from './channelUtil.js';
+import {
+  Kind,
+  type AtlasErrorKind,
+  type ChannelState,
+  type Generation,
+  type PendingEntry,
+  type PendingOutcome,
+  type QueuedRequest,
+} from './channelTypes.js';
 
 /** 创建一个 Channel（连接本体；start 由 Client 编排器驱动）。 */
 export function newChannel(args: {
@@ -160,6 +118,11 @@ export class Channel {
     return this.notifier.on(op, handler);
   }
 
+  /** 订阅全部推送 op（不预设 op 的观察者；消费者自行按 op 判定用途）。 */
+  onAny(handler: NotifyHandler): () => void {
+    return this.notifier.onAny(handler);
+  }
+
   /** 当前代（无连接为 null）。 */
   currentGeneration(): Generation | null {
     return this.gen;
@@ -201,6 +164,8 @@ export class Channel {
     return this.invokeOnce(op, req, io, requestId);
   }
 
+  /** invokeOnce 发送一次请求并等待结算：守卫 → 组帧 → 等待 → 归类。
+   * 拆成 marshalRequest/buildRequest/awaitOutcome/unwrapOutcome 四步（单函数 ≤50 行）。 */
   private async invokeOnce(op: string, req: unknown, io: InvokeOptions, requestId = ''): Promise<unknown> {
     if (this._closed) throw new NetworkError('客户端已关闭');
     // Reconnecting 期间不写帧：死连接的写可能进内核缓冲后无响应、等待完整超时。
@@ -211,16 +176,29 @@ export class Channel {
     const gen = this.gen;
     if (!gen) throw new NetworkError('连接未建立');
     const seq = ++this.seqCounter;
-    // nil req（传输心跳 Ping 等）跳过序列化：payload 空（对齐 Go invoke 的
-    // req != nil 特判；评审缺陷：此前无条件 marshal，protobuf serializer 对
-    // null req 断言失败）。
-    const payload =
-      req === null || req === undefined
-        ? new Uint8Array(0)
-        : this.settings.serializer.marshal(req);
-    // 无连接传输（UDP/KCP）：凭据非空时置位 FLAG_SESSION 并用带会话槽 body，
-    // 供服务端按帧验证身份（匿名帧不置位）；长连接（TCP/WS）按连接绑定，
-    // 不置位、body 无会话字段（与 Go invokeOnce 同构）。
+    const payload = this.marshalRequest(req);
+    const { flags, body } = this.buildRequest(op, payload, requestId);
+    this.logger?.debugf('send op=%s seq=%s id=%s req=%s', op, seq, requestId, payloadSnippet(payload));
+    const timeoutMs = io.timeoutMs ?? this.settings.invokeTimeoutMs;
+    const outcome = await this.awaitOutcome(gen, `${gen.epoch}:${seq}`, op, seq, body, flags, timeoutMs);
+    return this.unwrapOutcome(op, seq, outcome);
+  }
+
+  /** marshalRequest 序列化请求载荷：nil req（传输心跳 Ping 等）跳过序列化发空 payload
+   * （对齐 Go invoke 的 req != nil 特判；protobuf serializer 对 null req 断言失败）。 */
+  private marshalRequest(req: unknown): Uint8Array {
+    if (req === null || req === undefined) return new Uint8Array(0);
+    return this.settings.serializer.marshal(req);
+  }
+
+  /** buildRequest 组装请求 body 与帧标志：无连接传输（UDP/KCP）凭据非空时置位
+   * FLAG_SESSION 并带会话槽（服务端按帧验证身份，匿名帧不置位）；长连接（TCP/WS）
+   * 按连接绑定，不置位、body 无会话字段（与 Go invokeOnce 同构）。 */
+  private buildRequest(
+    op: string,
+    payload: Uint8Array,
+    requestId: string,
+  ): { flags: number; body: Uint8Array } {
     let flags = 0;
     let slotToken = '';
     const sessionTokenFn = this.settings.sessionToken;
@@ -231,14 +209,22 @@ export class Channel {
         slotToken = token;
       }
     }
-    if (requestId !== '') {
-      flags |= FLAG_REQUEST_ID;
-    }
-    const body = buildRequestBodyFull(op, slotToken, requestId, payload);
-    this.logger?.debugf('send op=%s seq=%s id=%s req=%s', op, seq, requestId, snippet(payload));
-    const timeoutMs = io.timeoutMs ?? this.settings.invokeTimeoutMs;
-    const key = `${gen.epoch}:${seq}`;
-    const outcome = await new Promise<PendingOutcome>((resolve, reject) => {
+    if (requestId !== '') flags |= FLAG_REQUEST_ID;
+    return { flags, body: buildRequestBodyFull(op, slotToken, requestId, payload) };
+  }
+
+  /** awaitOutcome 登记 in-flight 并写出请求帧，等待响应/超时结算（恰一次：迟到结果
+   * 由 settleInflight 查表丢弃；写帧失败按本地协议错误 vs 网络错误归类）。 */
+  private awaitOutcome(
+    gen: Generation,
+    key: string,
+    op: string,
+    seq: number,
+    body: Uint8Array,
+    flags: number,
+    timeoutMs: number,
+  ): Promise<PendingOutcome> {
+    return new Promise<PendingOutcome>((resolve) => {
       const timer = setTimeout(() => {
         this.settleInflight(key, { kind: 'error', error: new TimeoutError(op, timeoutMs) });
       }, timeoutMs);
@@ -250,28 +236,32 @@ export class Channel {
       this.inflight.set(key, entry);
       void this.writeExclusive(() =>
         gen.transport.writeFrame(
-          { magic: MAGIC_DEFAULT, version: this.ver, type: 1, flags, seq, length: body.length },
+          { magic: MAGIC, version: this.ver, type: 1, flags, seq, length: body.length },
           body,
           this.settings.maxBodySize,
         ),
       ).catch((err) => {
-        // 评审缺陷修复：encodeFrame 抛的本地协议错误（如 body 超限——配置问题）
-        // 不得误分类为 NetworkError（否则触发无意义重连）；保留其 ProtocolError
-        // 身份，其余错误包 NetworkError。
-        const e = err instanceof ProtocolError ? err : new NetworkError('发送失败: ' + (err instanceof Error ? err.message : String(err)), err);
-        this.settleInflight(key, { kind: 'error', error: e });
+        this.settleInflight(key, { kind: 'error', error: classifyWriteError(err) });
       });
     });
+  }
+
+  /** unwrapOutcome 归类结算结果：业务拒绝抛 BusinessError（Reason 为主键）、网络/
+   * 超时/协议错误原样上抛、数据帧交序列化器解码。 */
+  private unwrapOutcome(op: string, seq: number, outcome: PendingOutcome): unknown {
     if (outcome.kind === 'status') {
+      // Status.class 原样投影（P6 错误模型语义：业务分支主键是 Reason，Class 供
+      // 日志定级与客户端处置决策；不在这里做类到异常类型的再映射）。
       throw new BusinessError(
         outcome.status.code,
         outcome.status.reason,
         outcome.status.message,
         outcome.status.metadata,
+        outcome.status.class,
       );
     }
     if (outcome.kind === 'error') throw outcome.error;
-    this.logger?.debugf('recv op=%s seq=%s resp=%s', op, seq, snippet(outcome.data));
+    this.logger?.debugf('recv op=%s seq=%s resp=%s', op, seq, payloadSnippet(outcome.data));
     return this.settings.serializer.unmarshal(outcome.data, null);
   }
 
@@ -317,7 +307,6 @@ export class Channel {
       item.reject(new NetworkError('客户端已关闭'));
     }
   }
-
 
   // ---- 代管理与生命周期 ----
 
@@ -469,12 +458,12 @@ export class Channel {
   }
 
   /** @internal 同目录协作模块（readloop）使用；不进公共导出面。 */
-  settleInflight(key: string, outcome: PendingOutcome | { kind: 'timeout'; error: TimeoutError }): void {
+  settleInflight(key: string, outcome: PendingOutcome): void {
     const entry = this.inflight.get(key);
     if (!entry) return; // 已结算：迟到结果静默丢弃
     this.inflight.delete(key);
     clearTimeout(entry.timer);
-    entry.settle(outcome as PendingOutcome);
+    entry.settle(outcome);
   }
 
   private writeExclusive<T>(fn: () => Promise<T>): Promise<T> {
@@ -487,23 +476,12 @@ export class Channel {
   }
 }
 
-/** newRequestId 生成请求幂等键（crypto.getRandomValues 12 字节 base64url；零外部依赖）。 */
-function newRequestId(): string {
-  const b = new Uint8Array(12);
-  crypto.getRandomValues(b);
-  return base64UrlEncode(b);
-}
-
-/** base64UrlEncode 无 padding 的 URL-safe base64 编码。 */
-function base64UrlEncode(b: Uint8Array): string {
-  let bin = '';
-  for (const x of b) bin += String.fromCharCode(x);
-  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-}
-
-/** snippet 取 payload 调试摘要（Debug 日志用：完整 JSON 截断 512 字节，防日志爆炸）。 */
-function snippet(data: Uint8Array): string {
-  if (data.length === 0) return '{}';
-  const text = new TextDecoder('utf-8', { fatal: false }).decode(data);
-  return text.length > 512 ? text.slice(0, 512) + '...(truncated)' : text;
+/** classifyWriteError 归类写帧失败：本地协议错误（如 body 超限——配置问题）保留
+ * ProtocolError 身份，不得误分类为 NetworkError（否则触发无意义重连）。 */
+function classifyWriteError(err: unknown): AtlasErrorKind {
+  if (err instanceof ProtocolError) return err;
+  return new NetworkError(
+    '发送失败: ' + (err instanceof Error ? err.message : String(err)),
+    err,
+  );
 }

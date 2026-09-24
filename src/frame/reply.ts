@@ -32,7 +32,10 @@ export function decodeReply(b: Uint8Array): DecodedReply {
   if (b.length < 5 + statusLen) {
     throw new ProtocolError(`frame: reply status 截断`);
   }
-  const status: Status = statusLen > 0 ? decodeStatus(b.subarray(5, 5 + statusLen)) : { code: 0, reason: '', message: '' };
+  const status: Status =
+    statusLen > 0
+      ? decodeStatus(b.subarray(5, 5 + statusLen))
+      : { code: 0, reason: '', message: '', class: 0 };
   const off = 5 + statusLen;
   if (b.length < off + 4) {
     throw new ProtocolError(`frame: reply data 截断`);

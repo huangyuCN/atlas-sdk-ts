@@ -43,26 +43,23 @@ export {
   type Invoker,
 } from './client/invoker.js';
 export {
-  defaultSessionOps,
   newSession,
-  OpSessionHeartbeat,
-  OpSessionKickedNotify,
-  OpSessionLogin,
-  OpSessionLogout,
-  OpSessionRegister,
-  OpSessionResume,
   Session,
+  SessionReplyUnresolvedError,
   WithAutoResume,
   WithResumeHook,
   WithSessionHeartbeatInterval,
-  WithSessionOps,
-  type LogoutReq,
-  type ResumeReq,
-  type SessionOps,
   type SessionOption,
-  type SessionReply,
   type SessionSettings,
 } from './client/session.js';
+export {
+  withSessionProtocol,
+  type KickedResult,
+  type PushEnvelope,
+  type SessionOps,
+  type SessionProtocol,
+} from './client/sessionProtocol.js';
+export { CLIENT_VERSION } from './version.js';
 export {
   TransportKind,
   createMockTransport,
@@ -71,7 +68,7 @@ export {
   type MockServer,
   type TransportDialer,
 } from './client/transport.js';
-export { HeartbeatOperation, HEARTBEAT_FAILURES } from './client/channel.js';
+export { HeartbeatOperation, HEARTBEAT_FAILURES } from './client/channelTypes.js';
 export type { NotifyHandler } from './client/notify.js';
 export type { WebSocketLike, WebSocketFactory } from './transport/ws.js';
 export { connectWebSocketTransport, dialWebSocket, wsDialer } from './transport/ws.js';

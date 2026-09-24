@@ -13,6 +13,9 @@
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
     "noEmit": true,
+    // 允许 test 直接 import examples/*.mjs（项目侧接缝参考实现）并对其做契约断言；
+    // 仅放宽解析、不开 checkJs（.mjs 不参与类型检查）。
+    "allowJs": true,
     "types": ["node"]
   },
   "include": ["src/**/*.ts", "test/**/*.ts", "tsup.config.ts", "vitest.config.ts"]

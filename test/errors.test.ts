@@ -9,8 +9,10 @@ import {
   isBusinessError,
   isProtocolError,
 } from '../src/client/errors.js';
+import { Kind, newClient } from '../src/client/client.js';
 import { ProtocolError as FrameProtocolError } from '../src/frame/protocolError.js';
 import { JsonSerializer, defaultSerializer } from '../src/client/serializer.js';
+import { buildReplyErr, buildTestStatus, makeDialer } from './helpers.js';
 
 describe('错误四分类', () => {
   it('四类均继承 AtlasError 且 name="AtlasError"', () => {
@@ -66,6 +68,20 @@ describe('错误四分类', () => {
   it('TimeoutError 携带 operation', () => {
     const e = new TimeoutError('/battle.v1.Battle/OnFrame', 1000);
     expect(e.operation).toBe('/battle.v1.Battle/OnFrame');
+  });
+
+  it('业务拒绝投影：Status.class → BusinessError.errorClass（golden p6 语义）', async () => {
+    const { dialer } = makeDialer((server) =>
+      // 失败包络带 Status.class=2（运行时错误类），对齐 golden status 用例语义
+      server.autoReply(() =>
+        buildReplyErr(buildTestStatus(404, 'PLAYER_NOT_FOUND', '玩家不存在', null, 2), new Uint8Array(0)),
+      ),
+    );
+    const c = await newClient(dialer, { kind: 'memory', addr: 'mock' }, Kind.Business, []);
+    const err = await c.invoke('/op', null).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(BusinessError);
+    expect((err as BusinessError).errorClass).toBe(2);
+    await c.close();
   });
 });
 

@@ -3,7 +3,8 @@
 //   连续 N 次判定死链并关闭当前代连接触发重连；按代绑定（换代时旧循环随代退出）。
 //   会话心跳：仅业务通道（kind 门控）——周期调用业务 Heartbeat 续租会话；
 //   业务错误经 CAS 单飞触发重登钩子，网络错误静默（重连机制处理）。
-import { HeartbeatOperation, type Channel, type Generation } from './channel.js';
+import type { Channel } from './channel.js';
+import { HeartbeatOperation, type Generation } from './channelTypes.js';
 import { WithFailFast, WithRequestTimeout } from './options.js';
 import { BusinessError } from './errors.js';
 

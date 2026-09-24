@@ -1,8 +1,10 @@
 // mock-gateway：本地 TCP mock 网关（examples/smoke.mjs 的脚本逻辑验证用）。
-// 按 smoke 协议回包：Register / Login / Heartbeat / 内置 Ping。
+// 按 smoke 协议回包：Register / Login / Heartbeat / 内置 Ping（JSON 载荷）。
+// 会话 op 取自生成物（examples/gatewayv1.mjs），与真机网关同名同值。
 // 用法：node examples/mock-gateway.mjs [port]（默认 19001）
 import * as net from 'node:net';
-import { readFrameFrom, encodeFrame, MsgType } from '../dist/index.js';
+import { readFrameFrom, encodeFrame, parseRequestBodyFull, MsgType } from '../dist/index.js';
+import { sessionOps } from './gatewayv1.mjs';
 
 /** 成功响应包络：[hasError=0][dataLen:u32][data]（响应帧 body 直连包络，无 op 头）。
  * 入参为已编码的 payload 字节（注意不要再 stringify——Uint8Array 会被展开成数字键）。 */
@@ -17,9 +19,9 @@ const buildReplyOK = (data) => {
 const port = Number(process.argv[2] ?? 19001);
 
 const op = {
-  register: '/gateway.v1.GatewayAuth/Register',
-  login: '/gateway.v1.GatewayAuth/Login',
-  heartbeat: '/gateway.v1.GatewayAuth/Heartbeat',
+  register: sessionOps.register,
+  login: sessionOps.login,
+  heartbeat: sessionOps.heartbeat,
 };
 
 function reply(seq, payload) {
@@ -48,9 +50,10 @@ const server = net.createServer((socket) => {
 
 function handle(header, body, socket) {
   if (header.type !== MsgType.Request) return;
-  const opLen = ((body[0] ?? 0) << 8) | (body[1] ?? 0);
-  const operation = new TextDecoder().decode(body.subarray(2, 2 + opLen));
-  const payload = JSON.parse(new TextDecoder().decode(body.subarray(2 + opLen)) || '{}');
+  // 可选段（会话槽 / 请求幂等键）由协议层按 flags 解析：客户端默认带幂等键，
+  // 直接当 payload 读会把键段当成 JSON 前缀（mock 只是脚本替身，但须按线上布局）。
+  const { operation, payload: raw } = parseRequestBodyFull(body, header.flags ?? 0);
+  const payload = JSON.parse(new TextDecoder().decode(raw) || '{}');
   switch (operation) {
     case op.register: {
       socket.write(reply(header.seq, { playerId: 'mock-' + payload.account }));

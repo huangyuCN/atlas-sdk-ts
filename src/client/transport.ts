@@ -5,7 +5,7 @@
 //              连接关闭/断连时 reject（调用方按错误分类处理）。
 //   writeFrame 整帧原子写（并发场景由内核写锁保证不交错——接口实现只需单帧写语义）。
 //   close      关闭连接；阻塞中的 readFrame 随即 reject。
-import { FLAG_REQUEST_ID, FLAG_SESSION } from '../frame/constants.js';
+import { FLAG_REQUEST_ID, FLAG_SESSION, MAGIC } from '../frame/constants.js';
 import type { Header } from '../frame/constants.js';
 import { encodeFrame, type FrameRead } from '../frame/frame.js';
 import { NetworkError } from './errors.js';
@@ -55,8 +55,9 @@ export interface MockServer {
   sendFrame(type: number, seq: number, body: Uint8Array, version?: number): void;
   /** 模拟服务端自动应答：收到 Request 帧后回同 seq 的 Response（statusHex 空 = 成功）。 */
   autoReply(payloadFor: (op: string, payload: Uint8Array) => Uint8Array): void;
-  /** 模拟服务端主动推送 Notify 帧。 */
-  notify(op: string, payload: Uint8Array): void;
+  /** 模拟服务端主动推送 Notify 帧；version 为推送帧头载荷编码（1 = protojson、
+   * 2 = protobuf wire，缺省 1——会话接缝的推送信封版本分派用例用）。 */
+  notify(op: string, payload: Uint8Array, version?: number): void;
   /** 模拟断连：阻塞中的 readFrame 以指定错误 reject（缺省 NetworkError）。 */
   drop(err?: Error): void;
 }
@@ -91,7 +92,7 @@ export function createMockTransport(): { transport: ChannelTransport; server: Mo
       if (isClosed) return;
       // 服务端帧按同一线格式编码（magic/version/type 合法，bodyLen=body.length；
       // version 对齐 Go fakeServer.replyVer：服务端配置的响应帧头载荷编码，缺省 1）
-      const h: Header = { magic: 0x41544c53, version, type: type as Header['type'], seq, length: body.length };
+      const h: Header = { magic: MAGIC, version, type: type as Header['type'], seq, length: body.length };
       deliver({ header: h, body });
     },
     autoReply(payloadFor) {
@@ -116,8 +117,8 @@ export function createMockTransport(): { transport: ChannelTransport; server: Mo
         server.sendFrame(MsgTypeResponse, header.seq, payloadFor(op, rest));
       };
     },
-    notify(op, payload) {
-      server.sendFrame(MsgTypeNotify, nextNotifySeq(), buildBody(op, payload));
+    notify(op, payload, version = 1) {
+      server.sendFrame(MsgTypeNotify, nextNotifySeq(), buildBody(op, payload), version);
     },
     drop(err) {
       if (isClosed) return;

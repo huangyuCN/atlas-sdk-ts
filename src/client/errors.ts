@@ -24,13 +24,23 @@ export class BusinessError extends AtlasError {
   readonly code: number;
   readonly reason: string;
   readonly messageText: string;
+  /** 错误分类（服务端 Status.class 原样投影：0 = 未分类、1 = 业务、2 = 运行时、
+   * 3 = 取消；属性名取 errorClass 因 class 是 JS 保留字）。 */
+  readonly errorClass: number;
   readonly metadata?: Record<string, string>;
 
-  constructor(code: number, reason: string, message: string, metadata?: Record<string, string>) {
+  constructor(
+    code: number,
+    reason: string,
+    message: string,
+    metadata?: Record<string, string>,
+    errorClass = 0,
+  ) {
     super(`business error: code=${code} reason=${reason} message=${message}`);
     this.code = code;
     this.reason = reason;
     this.messageText = message;
+    this.errorClass = errorClass;
     this.metadata = metadata;
   }
 }

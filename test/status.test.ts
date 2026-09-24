@@ -10,12 +10,13 @@ import {
 } from './helpers.js';
 
 describe('decodeStatus', () => {
-  it('全字段解码（code/reason/message/metadata）', () => {
-    const raw = buildTestStatus(404, 'PLAYER_NOT_FOUND', '玩家不存在', { k: 'v' });
+  it('全字段解码（code/reason/message/class/metadata）', () => {
+    const raw = buildTestStatus(404, 'PLAYER_NOT_FOUND', '玩家不存在', { k: 'v' }, 2);
     const st = decodeStatus(raw);
     expect(st.code).toBe(404);
     expect(st.reason).toBe('PLAYER_NOT_FOUND');
     expect(st.message).toBe('玩家不存在');
+    expect(st.class).toBe(2);
     expect(st.metadata).toEqual({ k: 'v' });
   });
 
@@ -24,6 +25,7 @@ describe('decodeStatus', () => {
     expect(st.code).toBe(0);
     expect(st.reason).toBe('');
     expect(st.message).toBe('');
+    expect(st.class).toBe(0);
     expect(st.metadata).toBeUndefined();
   });
 
@@ -91,14 +93,20 @@ describe('decodeStatus', () => {
     expect(st.reason).toBe('OK');
   });
 
-  it('未知字段（>4）的 fixed64 wire 静默跳过（评审 Fix：与 Go proto.Unmarshal 对齐）', () => {
-    // field 5 wire 1（64-bit）+ 8 字节载荷 + 合法 field 1 varint code=7
+  it('未知字段（>5）的 fixed64 wire 静默跳过（评审 Fix：与 Go proto.Unmarshal 对齐）', () => {
+    // field 6 wire 1（64-bit）+ 8 字节载荷 + 合法 field 1 varint code=7
     const raw = Uint8Array.of(
-      0x29, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, // field5 wire1 + 8B
+      0x31, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, // field6 wire1 + 8B
       0x08, 0x07, // field1 varint 7
     );
     const st = decodeStatus(raw);
     expect(st.code).toBe(7); // 未知 fixed64 被跳过，后续字段正常解析
+  });
+
+  it('已知字段 class（field5）wire type 不符 → ProtocolError', () => {
+    // field 5（class 声明 varint）收到 wire 1（64-bit）：tag = 5<<3|1 = 0x29
+    const raw = Uint8Array.of(0x29, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08);
+    expect(() => decodeStatus(raw)).toThrow(ProtocolError);
   });
 
   it('已知字段号 wire type 不符 → ProtocolError（与 Go proto.Unmarshal 一致）', () => {

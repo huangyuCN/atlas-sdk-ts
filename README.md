@@ -51,7 +51,7 @@ cd atlas-sdk-ts && pnpm install && pnpm build   # 产物在 dist/
 import { buildRequestBody, encodeFrame, encodeUtf8, MsgType } from '@huangyucn/atlas-sdk-ts';
 
 // body = [opLen:u16][operation][payload]（payload 为 JSON 字节）
-const body = buildRequestBody('/gateway.v1.GatewayAuth/Login',
+const body = buildRequestBody('/gateway.v1.Session/Login',
   encodeUtf8(JSON.stringify({ playerId: 'p1' })));
 
 // 帧头 16 字节大端 + body；magic/version 传 0 自动补协议默认值
@@ -121,7 +121,7 @@ socket.on('data', (chunk: Uint8Array) => {
 而非语言标准），本 SDK 的 UTF-8 编解码为自带实现，因此协议层在任何 ES2020 环境
 可直接使用；通道层在引擎宿主仅 WebSocket 可用（TCP/UDP 无 JS 绑定）。
 
-## DTO
+## DTO 与会话协议接缝
 
 游戏项目的消息 DTO 无需手写，由 atlas CLI 从 proto 定义生成：
 
@@ -132,18 +132,37 @@ atlas sdk gen --lang ts --protoset <protoc --descriptor_set_out 产物> --out dt
 产物按 proto 包分目录（如 `gateway/v1/`、`battle/v1/`），以相对导入使用，
 生成物为纯 interface + 判空/64 位整数辅助（64 位整数线上为字符串）。
 
+会话状态机（登录/恢复/心跳/被踢）不引用任何会话消息类型，只依赖**会话协议接缝**
+`SessionProtocol`（5 个 op + 取 token/playerID/过期时间 + 被挤下线推送识别与原因提取）；
+项目侧用生成物一行接入：
+
+```ts
+const session = newSession([withSessionProtocol(newGatewayV1SessionProtocol())]);
+session.bind(client);
+await session.login({ playerId, password });   // 自动带 client_version（见 src/version.ts）
+```
+
+参考实现见 `examples/gatewayv1.mjs`（op 名由生成的服务描述符推导，字段名按生成 DTO 读取）。
+接缝收到的推送载荷是**未解码的原始字节**（`Uint8Array`）——SDK 对推送不做解码，由接缝
+实现用生成的 `KickedNotify` DTO 自行解码取 `reason`（三语言同一约定）。
+
 ## 开发
 
 ```bash
 pnpm install    # 安装依赖（pnpm ≥ 10）
-pnpm test       # 单测 + golden vectors 对拍（22 用例，与 Go SDK 同一份向量）
+pnpm test       # 单测 + golden vectors 对拍（24 用例，与 Go SDK 同一份向量）
 pnpm typecheck  # tsc --noEmit（strict）
 pnpm build      # tsup → dist/（ESM + CJS + d.ts）
 pnpm bench      # 协议层 benchmark
+bash scripts/gen-dto.sh   # 从上游生成物刷新协议事实（帧常量/会话 stub/冒烟 schema）
 ```
 
 > golden vectors 向量包在 atlas 主仓 `testdata/golden/`。本地测试默认读取与本仓
 > 同级的 `../atlas/testdata/golden`，或用环境变量 `ATLAS_GOLDEN_DIR` 指定。
+
+> `gen-dto.sh` 只读消费上游：帧常量取自框架仓（`ATLAS_DIR`，默认同级 `../atlas`），
+> 会话 stub 与冒烟 schema 取自模板仓 descriptor set（`ATLAS_LAYOUT_DIR`，默认同级
+> `../atlas-game-layout`）。产物全部入库，CI 有「重生成无 diff」门禁。
 
 ## 路线图
 

@@ -1,7 +1,8 @@
 // Client：连接编排器（门面）。管理一条或多条通道（single/dual 形态）；
 // Invoke/On 默认走业务通道，Channel(kind) 提供通道视图（生命周期归 Client，
 // 视图不单独 Connect/Close）；State() 聚合向下降级。
-import { Channel, Kind, type ChannelState } from './channel.js';
+import { Channel } from './channel.js';
+import { Kind, type ChannelState } from './channelTypes.js';
 import type { NotifyHandler } from './notify.js';
 import type { InvokeOption, Option } from './options.js';
 import { supervise } from './reconnect.js';
@@ -43,6 +44,10 @@ export class ChannelView {
     return this.ch.on(op, handler);
   }
 
+  onAny(handler: NotifyHandler): () => void {
+    return this.ch.onAny(handler);
+  }
+
   state(): ChannelState {
     return this.ch.state;
   }
@@ -68,6 +73,11 @@ export class Client {
   /** 订阅推送（默认业务通道）。 */
   on(op: string, handler: NotifyHandler): () => void {
     return this.business().on(op, handler);
+  }
+
+  /** 订阅全部推送 op（默认业务通道；不预设 op 的观察者）。 */
+  onAny(handler: NotifyHandler): () => void {
+    return this.business().onAny(handler);
   }
 
   /** 通道视图（dual 形态区分业务/战斗；未知 kind 返回 null）。 */
