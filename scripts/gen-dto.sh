@@ -68,4 +68,5 @@ protoc --descriptor_set_in="$DESC" \
   api/lockstep/lockstep.proto
 echo "冒烟 schema → examples/gen/api/**"
 
-echo "生成完成（重跑本脚本应无 diff；当前工作区改动：$(git -C "$REPO_ROOT" status --porcelain | wc -l | tr -d ' ') 处）"
+# 改动计数排除 CI 检出的上游目录（它们不是本仓产物，见 workflow 门禁同款 pathspec）。
+echo "生成完成（重跑本脚本应无 diff；当前工作区改动：$(git -C "$REPO_ROOT" status --porcelain -- . ':!atlas' ':!atlas-game-layout' | wc -l | tr -d ' ') 处）"

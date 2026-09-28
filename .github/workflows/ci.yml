@@ -64,9 +64,11 @@ jobs:
         run: |
           bash scripts/gen-dto.sh
           git diff --exit-code
-          if [ -n "$(git status --porcelain)" ]; then
+          # 上游两仓检出在本仓工作区内（path: atlas / atlas-game-layout），其未跟踪目录
+          # 不代表本仓产物改动，必须排除（':!' 为 git pathspec 排除语法）。
+          if [ -n "$(git status --porcelain -- . ':!atlas' ':!atlas-game-layout')" ]; then
             echo "::error::重生成产出了未入库的改动（含新增文件），请本地跑 bash scripts/gen-dto.sh 后提交产物"
-            git status --porcelain
+            git status --porcelain -- . ':!atlas' ':!atlas-game-layout'
             exit 1
           fi
         env:
