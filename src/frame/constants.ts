@@ -1,6 +1,6 @@
 /**
- * Atlas 帧协议常量（唯一来源：框架仓 transport/frame 的三语言生成物，由
- * scripts/gen-dto.sh 快照到 src/frame/gen/frame.ts——本文件只做转发，不写字面量；
+ * Atlas 帧协议常量与帧头类型（唯一来源：框架仓 transport/frame 的三语言生成物，由
+ * scripts/gen-dto.sh 快照到 src/frame/gen/{consts,codec}.ts——本文件只做转发，不写字面量；
  * 规范见 atlas 仓 docs/superpowers/specs/2026-08-28-client-sdk-multilang-design.md §2）。
  *
  * 本包为协议层，零运行时依赖（仅 Web 标准字节 API），浏览器与 Node 双目标共用。
@@ -15,7 +15,7 @@ import {
   MSG_TYPE_REQUEST,
   MSG_TYPE_RESPONSE,
   VERSION2,
-} from './gen/frame.js';
+} from './gen/consts.js';
 
 export {
   FLAG_SESSION,
@@ -26,7 +26,7 @@ export {
   MSG_TYPE_REQUEST,
   MSG_TYPE_RESPONSE,
   VERSION,
-} from './gen/frame.js';
+} from './gen/consts.js';
 
 /** 载荷编码 ver=2（protobuf 二进制 wire format；生成物名为 VERSION2，本包沿用
  * 历史导出名 VERSION_2——SDK 内引用符号不变）。可选增强：服务端支持 ver=2 前
@@ -60,16 +60,8 @@ export const MsgType = {
 
 export type MsgType = (typeof MsgType)[keyof typeof MsgType];
 
-/** 帧头的客户端侧表示（与 Go frame.Header 同构；rsv 次字节不表示）。 */
-export interface Header {
-  magic: number;
-  version: number;
-  type: MsgType;
-  /** flags 位图（原 rsv 首字节；bit0 = FLAG_SESSION；缺省 0）。 */
-  flags?: number;
-  seq: number;
-  length: number;
-}
+/** 帧头的客户端侧表示（唯一来源：生成物 codec.ts 的线格式类型，本处只做转发）。 */
+export type { Header } from './gen/codec.js';
 
 /** 序列化器的可选扩展接口（载荷编码版本声明，规范 §3.1 载荷编码协商）：
  * client.Serializer 的实现者（如将来的 @bufbuild/protobuf 序列化器）可选择

@@ -123,10 +123,13 @@ socket.on('data', (chunk: Uint8Array) => {
 
 ## DTO 与会话协议接缝
 
-游戏项目的消息 DTO 无需手写，由 atlas CLI 从 proto 定义生成：
+游戏项目的消息 DTO 无需手写：项目里执行 `make proto`，框架的 `protoc-gen-atlas-client`
+（`--atlas-client_opt=lang=ts`）会按 proto 把 DTO 与 op stub 生成到项目的 `api/client/ts/**`。
+
+本仓自身的 DTO / 帧常量 / 会话 stub 副本**只从上游生成物刷新**（不手写、不二次定义）：
 
 ```bash
-atlas sdk gen --lang ts --protoset <protoc --descriptor_set_out 产物> --out dto
+bash scripts/gen-dto.sh   # 帧常量取自框架仓（ATLAS_DIR），会话 stub 取自模板仓生成物
 ```
 
 产物按 proto 包分目录（如 `gateway/v1/`、`battle/v1/`），以相对导入使用，

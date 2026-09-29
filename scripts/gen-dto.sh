@@ -2,11 +2,11 @@
 # gen-dto：从上游生成物刷新本仓的全部「协议事实」，单一来源、零手写副本。
 #
 # 输入（只读消费，不在本仓生成协议）：
-#   - 框架仓 frame 常量生成物：$ATLAS_DIR/transport/frame/gen/ts/frame.ts
+#   - 框架仓 frame 常量与编解码生成物：$ATLAS_DIR/transport/frame/gen/ts/{consts,codec}.ts
 #   - 模板仓会话协议 descriptor set：$ATLAS_LAYOUT_DIR/api/gateway/v1/session.proto
 #     （含 battle 域：examples 的 ver=2 protobuf 冒烟需要权威 DTO）
 # 输出（全部入库，CI 有「重生成无 diff」门禁）：
-#   1. src/frame/gen/frame.ts                              帧协议常量快照（逐字节复制）
+#   1. src/frame/gen/consts.ts + src/frame/gen/codec.ts       帧协议常量与编解码快照（逐字节复制）
 #   2. src/gen/api/gateway/v1/opclient/session_pb.ts       会话 stub 快照（零运行时 DTO + op 名 + 提取器）
 #      src/gen/api/common/v1/opclient/common_pb.ts         会话 stub 的跨包依赖（PlayerSummary）
 #   3. examples/gen/api/**                                 冒烟用 @bufbuild schema（protoc-gen-es，ver=2 编码用）
@@ -28,10 +28,12 @@ for d in "$ATLAS_DIR" "$ATLAS_LAYOUT_DIR"; do
   fi
 done
 
-# 1) 帧协议常量：框架生成物逐字节复制到仓内固定路径（SDK 侧 constants.ts 只做转发）。
+# 1) 帧协议常量与编解码：框架生成物逐字节复制到仓内固定路径（SDK 侧只做转发，无手写副本）。
 mkdir -p src/frame/gen
-cp "$ATLAS_DIR/transport/frame/gen/ts/frame.ts" src/frame/gen/frame.ts
-echo "帧协议常量 → src/frame/gen/frame.ts"
+rm -f src/frame/gen/frame.ts
+cp "$ATLAS_DIR/transport/frame/gen/ts/consts.ts" src/frame/gen/consts.ts
+cp "$ATLAS_DIR/transport/frame/gen/ts/codec.ts" src/frame/gen/codec.ts
+echo "帧协议常量/编解码 → src/frame/gen/{consts,codec}.ts"
 
 # 2) 会话协议 descriptor set：模板仓导出（session.proto 导入框架仓的 atlas route 注解，
 #    故必须同时给两个 include 根）。

@@ -49,7 +49,7 @@ describe('decodeUtf8（严格模式）', () => {
   });
 
   it('全 ASCII 快路径', () => {
-    expect(decodeUtf8(bytesOf('/gateway.v1.Auth/Login'))).toBe('/gateway.v1.Auth/Login');
+    expect(decodeUtf8(bytesOf('/gateway.v1.Session/Login'))).toBe('/gateway.v1.Session/Login');
   });
 
   it('开头 BOM 剥离（对齐宿主默认行为）', () => {

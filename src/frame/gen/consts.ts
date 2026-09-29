@@ -28,13 +28,3 @@ export const MSG_TYPE_NOTIFY = 3;
 export const FLAG_SESSION = 1;
 /** FlagRequestID body 携带请求幂等键 */
 export const FLAG_REQUEST_I_D = 2;
-
-/** 帧头固定布局：magic(4) | version(1) | msgType(1) | flags(1) | pad(1) | seq(4) | bodyLen(4)。 */
-export interface FrameHeader {
-  magic: number;
-  version: number;
-  msgType: number;
-  flags: number;
-  seq: number;
-  bodyLen: number;
-}
