@@ -47,6 +47,11 @@ export class BusinessError extends AtlasError {
 
 /** 网络故障：连接断开、发送失败、重连排队溢出。自动重连后可重试。 */
 export class NetworkError extends AtlasError {
+  /** 是否值得重试（缺省 true）。调用方（如战斗直连会话）在**明确判定为拒绝**
+   * 而非网络抖动时置 false——例如接入层在升级阶段/无回执时断开，重试同一张票
+   * 无意义（判定入口见 src/battle/errors.ts 的 isEdgeRejected）。 */
+  retryable = true;
+
   constructor(message: string, cause?: unknown) {
     super(`network error: ${message}`);
     if (cause !== undefined) this.cause = cause;

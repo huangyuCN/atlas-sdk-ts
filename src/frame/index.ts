@@ -34,3 +34,4 @@ export {
 export { decodeStatus, type Status } from './status.js';
 export { decodeReply, type DecodedReply } from './reply.js';
 export { decodeUtf8, encodeUtf8 } from './utf8.js';
+export { decodeBase64Std, encodeBase64UrlRaw } from './base64.js';

@@ -3,6 +3,7 @@
 // （on* 事件属性 + send/close）——桥接两侧避免按宿主分叉通道实现。
 // 本文件零平台依赖（仅 Web 标准），主入口导出；Node 亦可用（其具备全局 WebSocket）。
 import { encodeFrame, decodeFrame } from '../frame/frame.js';
+import { encodeBase64UrlRaw } from '../frame/base64.js';
 import { ProtocolError as FrameProtocolError } from '../frame/protocolError.js';
 import { HEADER_SIZE, type Header } from '../frame/constants.js';
 import { NetworkError, ProtocolError } from '../client/errors.js';
@@ -67,14 +68,23 @@ export function dialWebSocket(
   cfg: DialConfig,
   opts?: { wsFactory?: WebSocketFactory; openTimeoutMs?: number },
 ): Promise<ChannelTransport> {
-  const url = cfg.addr.startsWith('ws://') || cfg.addr.startsWith('wss://')
-    ? cfg.addr
-    : `ws://${cfg.addr}${cfg.path ?? '/ws'}`;
   const factory = opts?.wsFactory ?? ((u: string) => {
     const Ctor = (globalThis as unknown as { WebSocket: new (url: string) => WebSocketLike }).WebSocket;
     return new Ctor(u);
   });
-  return connectWebSocketTransport(factory(url), opts?.openTimeoutMs ?? 10_000);
+  return connectWebSocketTransport(factory(buildWsUrl(cfg)), opts?.openTimeoutMs ?? 10_000);
+}
+
+/** buildWsUrl 组装拨号 URL：`ws://`/`wss://` 完整地址原样用，`host:port` 补 path
+ *（缺省 /ws）；cfg.ticket 非空时把票以 base64url（RawURLEncoding，无填充）追加为
+ * `?ticket=`——战斗直连接入层的握手面约定（接入层也接受头 X-Atlas-Ticket）。 */
+export function buildWsUrl(cfg: DialConfig): string {
+  const base = cfg.addr.startsWith('ws://') || cfg.addr.startsWith('wss://')
+    ? cfg.addr
+    : `ws://${cfg.addr}${cfg.path ?? '/ws'}`;
+  const ticket = cfg.ticket;
+  if (ticket === undefined || ticket.length === 0) return base;
+  return `${base}${base.includes('?') ? '&' : '?'}ticket=${encodeBase64UrlRaw(ticket)}`;
 }
 
 /** 与 Go 侧 DialWS 对齐的便捷拨号器（供 newClient 使用）。 */

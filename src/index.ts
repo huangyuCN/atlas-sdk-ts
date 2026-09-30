@@ -61,6 +61,28 @@ export {
 } from './client/sessionProtocol.js';
 export { CLIENT_VERSION } from './version.js';
 export {
+  EdgeTransport,
+  MATCH_STARTED_NOTIFY_OPS,
+  isMatchStartedNotifyOp,
+  parseDirectPlan,
+  type DirectPlan,
+} from './battle/plan.js';
+export { BattleOps, BattlePushOps, DEFAULT_BATTLE_OPS, type BattleOpSet } from './battle/ops.js';
+export { ticketSlotValue } from './battle/ticket.js';
+export {
+  BATTLE_TICKET_EXPIRED_REASON,
+  BATTLE_TICKET_INVALID_REASON,
+  isBattleTicketExpired,
+  isBattleTicketRejected,
+  isEdgeRejected,
+} from './battle/errors.js';
+export {
+  openBattleSession,
+  type BattleSession,
+  type BattleSessionOptions,
+  type BattleSessionState,
+} from './battle/session.js';
+export {
   TransportKind,
   createMockTransport,
   type ChannelTransport,
@@ -71,5 +93,5 @@ export {
 export { HeartbeatOperation, HEARTBEAT_FAILURES } from './client/channelTypes.js';
 export type { NotifyHandler } from './client/notify.js';
 export type { WebSocketLike, WebSocketFactory } from './transport/ws.js';
-export { connectWebSocketTransport, dialWebSocket, wsDialer } from './transport/ws.js';
+export { buildWsUrl, connectWebSocketTransport, dialWebSocket, wsDialer } from './transport/ws.js';
 export { newWSClient } from './client/wsclient.js';

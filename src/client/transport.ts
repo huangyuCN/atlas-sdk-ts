@@ -41,6 +41,9 @@ export interface DialConfig {
   readonly kind: TransportKind;
   readonly addr: string;
   readonly path?: string;
+  /** 入场票据密文（战斗直连接入层用）：WS 拨号把它以 base64url（无填充）拼进升级
+   *  query `?ticket=`——接入层据此验票并选后端（规格 §3.2）。其余传输忽略本字段。 */
+  readonly ticket?: Uint8Array;
 }
 
 /** 拨号函数类型：建立一条传输连接。 */
