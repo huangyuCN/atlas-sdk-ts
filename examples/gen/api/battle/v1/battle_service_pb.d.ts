@@ -2,7 +2,7 @@
 // @generated from file api/battle/v1/battle_service.proto (package battle.v1, syntax proto3)
 /* eslint-disable */
 
-import type { GenFile, GenMessage, GenService } from "@bufbuild/protobuf/codegenv2";
+import type { GenEnum, GenFile, GenMessage, GenService } from "@bufbuild/protobuf/codegenv2";
 import type { Message } from "@bufbuild/protobuf";
 import type { FrameInputs, LockstepFrame, LockstepInput, SessionMeta, SnapshotMeta } from "../../lockstep/lockstep_pb.js";
 import type { EmptySchema } from "@bufbuild/protobuf/wkt";
@@ -136,6 +136,90 @@ export declare type SyncFramesReply = Message<"battle.v1.SyncFramesReply"> & {
 export declare const SyncFramesReplySchema: GenMessage<SyncFramesReply>;
 
 /**
+ * @generated from message battle.v1.IssueEntryTicketReq
+ */
+export declare type IssueEntryTicketReq = Message<"battle.v1.IssueEntryTicketReq"> & {
+  /**
+   * @generated from field: string battle_id = 1;
+   */
+  battleId: string;
+};
+
+/**
+ * Describes the message battle.v1.IssueEntryTicketReq.
+ * Use `create(IssueEntryTicketReqSchema)` to create a new message.
+ */
+export declare const IssueEntryTicketReqSchema: GenMessage<IssueEntryTicketReq>;
+
+/**
+ * @generated from message battle.v1.EdgeEndpoint
+ */
+export declare type EdgeEndpoint = Message<"battle.v1.EdgeEndpoint"> & {
+  /**
+   * @generated from field: battle.v1.EdgeTransport transport = 1;
+   */
+  transport: EdgeTransport;
+
+  /**
+   * @generated from field: string address = 2;
+   */
+  address: string;
+};
+
+/**
+ * Describes the message battle.v1.EdgeEndpoint.
+ * Use `create(EdgeEndpointSchema)` to create a new message.
+ */
+export declare const EdgeEndpointSchema: GenMessage<EdgeEndpoint>;
+
+/**
+ * @generated from message battle.v1.BattleTicketEntry
+ */
+export declare type BattleTicketEntry = Message<"battle.v1.BattleTicketEntry"> & {
+  /**
+   * @generated from field: string player_id = 1;
+   */
+  playerId: string;
+
+  /**
+   * @generated from field: bytes ticket = 2;
+   */
+  ticket: Uint8Array;
+};
+
+/**
+ * Describes the message battle.v1.BattleTicketEntry.
+ * Use `create(BattleTicketEntrySchema)` to create a new message.
+ */
+export declare const BattleTicketEntrySchema: GenMessage<BattleTicketEntry>;
+
+/**
+ * @generated from message battle.v1.IssueEntryTicketReply
+ */
+export declare type IssueEntryTicketReply = Message<"battle.v1.IssueEntryTicketReply"> & {
+  /**
+   * @generated from field: repeated battle.v1.EdgeEndpoint endpoints = 1;
+   */
+  endpoints: EdgeEndpoint[];
+
+  /**
+   * @generated from field: repeated battle.v1.BattleTicketEntry tickets = 2;
+   */
+  tickets: BattleTicketEntry[];
+
+  /**
+   * @generated from field: int64 expires_at_unix_ms = 3;
+   */
+  expiresAtUnixMs: bigint;
+};
+
+/**
+ * Describes the message battle.v1.IssueEntryTicketReply.
+ * Use `create(IssueEntryTicketReplySchema)` to create a new message.
+ */
+export declare const IssueEntryTicketReplySchema: GenMessage<IssueEntryTicketReply>;
+
+/**
  * @generated from message battle.v1.FrameBroadcast
  */
 export declare type FrameBroadcast = Message<"battle.v1.FrameBroadcast"> & {
@@ -176,6 +260,82 @@ export declare type BattleEndNotify = Message<"battle.v1.BattleEndNotify"> & {
  * Use `create(BattleEndNotifySchema)` to create a new message.
  */
 export declare const BattleEndNotifySchema: GenMessage<BattleEndNotify>;
+
+/**
+ * @generated from message battle.v1.PlayerOutNotify
+ */
+export declare type PlayerOutNotify = Message<"battle.v1.PlayerOutNotify"> & {
+  /**
+   * @generated from field: string battle_id = 1;
+   */
+  battleId: string;
+
+  /**
+   * @generated from field: string player_id = 2;
+   */
+  playerId: string;
+
+  /**
+   * @generated from field: battle.v1.PlayerOutReason reason = 3;
+   */
+  reason: PlayerOutReason;
+};
+
+/**
+ * Describes the message battle.v1.PlayerOutNotify.
+ * Use `create(PlayerOutNotifySchema)` to create a new message.
+ */
+export declare const PlayerOutNotifySchema: GenMessage<PlayerOutNotify>;
+
+/**
+ * @generated from enum battle.v1.EdgeTransport
+ */
+export enum EdgeTransport {
+  /**
+   * @generated from enum value: EDGE_TRANSPORT_UNSPECIFIED = 0;
+   */
+  UNSPECIFIED = 0,
+
+  /**
+   * @generated from enum value: EDGE_TRANSPORT_WS = 1;
+   */
+  WS = 1,
+
+  /**
+   * @generated from enum value: EDGE_TRANSPORT_KCP = 2;
+   */
+  KCP = 2,
+
+  /**
+   * @generated from enum value: EDGE_TRANSPORT_UDP = 3;
+   */
+  UDP = 3,
+}
+
+/**
+ * Describes the enum battle.v1.EdgeTransport.
+ */
+export declare const EdgeTransportSchema: GenEnum<EdgeTransport>;
+
+/**
+ * @generated from enum battle.v1.PlayerOutReason
+ */
+export enum PlayerOutReason {
+  /**
+   * @generated from enum value: PLAYER_OUT_REASON_UNSPECIFIED = 0;
+   */
+  UNSPECIFIED = 0,
+
+  /**
+   * @generated from enum value: PLAYER_OUT_REASON_OFFLINE_TIMEOUT = 1;
+   */
+  OFFLINE_TIMEOUT = 1,
+}
+
+/**
+ * Describes the enum battle.v1.PlayerOutReason.
+ */
+export declare const PlayerOutReasonSchema: GenEnum<PlayerOutReason>;
 
 /**
  * @generated from service battle.v1.BattleService
@@ -220,6 +380,14 @@ export declare const BattleService: GenService<{
     methodKind: "unary";
     input: typeof GetStateReqSchema;
     output: typeof GetStateReplySchema;
+  },
+  /**
+   * @generated from rpc battle.v1.BattleService.IssueEntryTicket
+   */
+  issueEntryTicket: {
+    methodKind: "unary";
+    input: typeof IssueEntryTicketReqSchema;
+    output: typeof IssueEntryTicketReplySchema;
   },
 }>;
 

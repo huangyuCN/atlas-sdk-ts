@@ -2,7 +2,7 @@
 // @generated from file api/battle/v1/battle_service.proto (package battle.v1, syntax proto3)
 /* eslint-disable */
 
-import { fileDesc, messageDesc, serviceDesc } from "@bufbuild/protobuf/codegenv2";
+import { enumDesc, fileDesc, messageDesc, serviceDesc, tsEnum } from "@bufbuild/protobuf/codegenv2";
 import { file_api_atlas_v1_route } from "../../atlas/v1/route_pb.js";
 import { file_api_battle_v1_battle } from "./battle_pb.js";
 import { file_api_lockstep_lockstep } from "../../lockstep/lockstep_pb.js";
@@ -12,7 +12,7 @@ import { file_google_protobuf_empty } from "@bufbuild/protobuf/wkt";
  * Describes the file api/battle/v1/battle_service.proto.
  */
 export const file_api_battle_v1_battle_service = /*@__PURE__*/
-  fileDesc("CiJhcGkvYmF0dGxlL3YxL2JhdHRsZV9zZXJ2aWNlLnByb3RvEgliYXR0bGUudjEiIgoNSm9pbkJhdHRsZVJlcRIRCgliYXR0bGVfaWQYASABKAkijQEKD0pvaW5CYXR0bGVSZXBseRIuCgRtZXRhGAEgASgLMiAuYXRsYXMuZ2FtZS5sb2Nrc3RlcC5TZXNzaW9uTWV0YRIVCg1jdXJyZW50X2ZyYW1lGAIgASgEEjMKCHNuYXBzaG90GAMgASgLMiEuYXRsYXMuZ2FtZS5sb2Nrc3RlcC5TbmFwc2hvdE1ldGEiVQoNRnJhbWVJbnB1dFJlcRIRCgliYXR0bGVfaWQYASABKAkSMQoFaW5wdXQYAiABKAsyIi5hdGxhcy5nYW1lLmxvY2tzdGVwLkxvY2tzdGVwSW5wdXQiEQoPRnJhbWVJbnB1dFJlcGx5IjsKDVN5bmNGcmFtZXNSZXESEQoJYmF0dGxlX2lkGAEgASgJEhcKD2xhc3Rfc2Vlbl9mcmFtZRgCIAEoBCKPAQoPU3luY0ZyYW1lc1JlcGx5EhUKDWN1cnJlbnRfZnJhbWUYASABKAQSMwoIc25hcHNob3QYAiABKAsyIS5hdGxhcy5nYW1lLmxvY2tzdGVwLlNuYXBzaG90TWV0YRIwCgZtaXNzZWQYAyADKAsyIC5hdGxhcy5nYW1lLmxvY2tzdGVwLkZyYW1lSW5wdXRzIlwKDkZyYW1lQnJvYWRjYXN0EhEKCWJhdHRsZV9pZBgBIAEoCRIxCgVmcmFtZRgCIAEoCzIiLmF0bGFzLmdhbWUubG9ja3N0ZXAuTG9ja3N0ZXBGcmFtZToE2NUiASJECg9CYXR0bGVFbmROb3RpZnkSEQoJYmF0dGxlX2lkGAEgASgJEhgKEHdpbm5lcl9wbGF5ZXJfaWQYAiABKAk6BNjVIgEyjgMKDUJhdHRsZVNlcnZpY2USQgoKSm9pbkJhdHRsZRIYLmJhdHRsZS52MS5Kb2luQmF0dGxlUmVxGhouYmF0dGxlLnYxLkpvaW5CYXR0bGVSZXBseRJCCg5TZW5kRnJhbWVJbnB1dBIYLmJhdHRsZS52MS5GcmFtZUlucHV0UmVxGhYuZ29vZ2xlLnByb3RvYnVmLkVtcHR5EkIKClN5bmNGcmFtZXMSGC5iYXR0bGUudjEuU3luY0ZyYW1lc1JlcRoaLmJhdHRsZS52MS5TeW5jRnJhbWVzUmVwbHkSTgoGQ3JlYXRlEh4uYmF0dGxlLnYxLkNyZWF0ZUJhdHRsZVJlcXVlc3QaHC5iYXR0bGUudjEuQ3JlYXRlQmF0dGxlUmVwbHkiBtLVIgIIAhJECghHZXRTdGF0ZRIWLmJhdHRsZS52MS5HZXRTdGF0ZVJlcRoYLmJhdHRsZS52MS5HZXRTdGF0ZVJlcGx5IgbS1SICCAIaG8rVIhcKBmJhdHRsZRABGAIiCWJhdHRsZV9pZEI/Wj1naXRodWIuY29tL2h1YW5neXVDTi9hdGxhcy1nYW1lLWxheW91dC9hcGkvYmF0dGxlL3YxO2JhdHRsZXYxYgZwcm90bzM", [file_api_atlas_v1_route, file_api_battle_v1_battle, file_api_lockstep_lockstep, file_google_protobuf_empty]);
+  fileDesc("CiJhcGkvYmF0dGxlL3YxL2JhdHRsZV9zZXJ2aWNlLnByb3RvEgliYXR0bGUudjEiIgoNSm9pbkJhdHRsZVJlcRIRCgliYXR0bGVfaWQYASABKAkijQEKD0pvaW5CYXR0bGVSZXBseRIuCgRtZXRhGAEgASgLMiAuYXRsYXMuZ2FtZS5sb2Nrc3RlcC5TZXNzaW9uTWV0YRIVCg1jdXJyZW50X2ZyYW1lGAIgASgEEjMKCHNuYXBzaG90GAMgASgLMiEuYXRsYXMuZ2FtZS5sb2Nrc3RlcC5TbmFwc2hvdE1ldGEiVQoNRnJhbWVJbnB1dFJlcRIRCgliYXR0bGVfaWQYASABKAkSMQoFaW5wdXQYAiABKAsyIi5hdGxhcy5nYW1lLmxvY2tzdGVwLkxvY2tzdGVwSW5wdXQiEQoPRnJhbWVJbnB1dFJlcGx5IjsKDVN5bmNGcmFtZXNSZXESEQoJYmF0dGxlX2lkGAEgASgJEhcKD2xhc3Rfc2Vlbl9mcmFtZRgCIAEoBCKPAQoPU3luY0ZyYW1lc1JlcGx5EhUKDWN1cnJlbnRfZnJhbWUYASABKAQSMwoIc25hcHNob3QYAiABKAsyIS5hdGxhcy5nYW1lLmxvY2tzdGVwLlNuYXBzaG90TWV0YRIwCgZtaXNzZWQYAyADKAsyIC5hdGxhcy5nYW1lLmxvY2tzdGVwLkZyYW1lSW5wdXRzIigKE0lzc3VlRW50cnlUaWNrZXRSZXESEQoJYmF0dGxlX2lkGAEgASgJIkwKDEVkZ2VFbmRwb2ludBIrCgl0cmFuc3BvcnQYASABKA4yGC5iYXR0bGUudjEuRWRnZVRyYW5zcG9ydBIPCgdhZGRyZXNzGAIgASgJIjYKEUJhdHRsZVRpY2tldEVudHJ5EhEKCXBsYXllcl9pZBgBIAEoCRIOCgZ0aWNrZXQYAiABKAwijgEKFUlzc3VlRW50cnlUaWNrZXRSZXBseRIqCgllbmRwb2ludHMYASADKAsyFy5iYXR0bGUudjEuRWRnZUVuZHBvaW50Ei0KB3RpY2tldHMYAiADKAsyHC5iYXR0bGUudjEuQmF0dGxlVGlja2V0RW50cnkSGgoSZXhwaXJlc19hdF91bml4X21zGAMgASgDIlwKDkZyYW1lQnJvYWRjYXN0EhEKCWJhdHRsZV9pZBgBIAEoCRIxCgVmcmFtZRgCIAEoCzIiLmF0bGFzLmdhbWUubG9ja3N0ZXAuTG9ja3N0ZXBGcmFtZToE2NUiASJECg9CYXR0bGVFbmROb3RpZnkSEQoJYmF0dGxlX2lkGAEgASgJEhgKEHdpbm5lcl9wbGF5ZXJfaWQYAiABKAk6BNjVIgEiaQoPUGxheWVyT3V0Tm90aWZ5EhEKCWJhdHRsZV9pZBgBIAEoCRIRCglwbGF5ZXJfaWQYAiABKAkSKgoGcmVhc29uGAMgASgOMhouYmF0dGxlLnYxLlBsYXllck91dFJlYXNvbjoE2NUiASp2Cg1FZGdlVHJhbnNwb3J0Eh4KGkVER0VfVFJBTlNQT1JUX1VOU1BFQ0lGSUVEEAASFQoRRURHRV9UUkFOU1BPUlRfV1MQARIWChJFREdFX1RSQU5TUE9SVF9LQ1AQAhIWChJFREdFX1RSQU5TUE9SVF9VRFAQAypbCg9QbGF5ZXJPdXRSZWFzb24SIQodUExBWUVSX09VVF9SRUFTT05fVU5TUEVDSUZJRUQQABIlCiFQTEFZRVJfT1VUX1JFQVNPTl9PRkZMSU5FX1RJTUVPVVQQATLsAwoNQmF0dGxlU2VydmljZRJCCgpKb2luQmF0dGxlEhguYmF0dGxlLnYxLkpvaW5CYXR0bGVSZXEaGi5iYXR0bGUudjEuSm9pbkJhdHRsZVJlcGx5EkIKDlNlbmRGcmFtZUlucHV0EhguYmF0dGxlLnYxLkZyYW1lSW5wdXRSZXEaFi5nb29nbGUucHJvdG9idWYuRW1wdHkSQgoKU3luY0ZyYW1lcxIYLmJhdHRsZS52MS5TeW5jRnJhbWVzUmVxGhouYmF0dGxlLnYxLlN5bmNGcmFtZXNSZXBseRJOCgZDcmVhdGUSHi5iYXR0bGUudjEuQ3JlYXRlQmF0dGxlUmVxdWVzdBocLmJhdHRsZS52MS5DcmVhdGVCYXR0bGVSZXBseSIG0tUiAggCEkQKCEdldFN0YXRlEhYuYmF0dGxlLnYxLkdldFN0YXRlUmVxGhguYmF0dGxlLnYxLkdldFN0YXRlUmVwbHkiBtLVIgIIAhJcChBJc3N1ZUVudHJ5VGlja2V0Eh4uYmF0dGxlLnYxLklzc3VlRW50cnlUaWNrZXRSZXEaIC5iYXR0bGUudjEuSXNzdWVFbnRyeVRpY2tldFJlcGx5IgbS1SICCAIaG8rVIhcKBmJhdHRsZRABGAIiCWJhdHRsZV9pZEI/Wj1naXRodWIuY29tL2h1YW5neXVDTi9hdGxhcy1nYW1lLWxheW91dC9hcGkvYmF0dGxlL3YxO2JhdHRsZXYxYgZwcm90bzM", [file_api_atlas_v1_route, file_api_battle_v1_battle, file_api_lockstep_lockstep, file_google_protobuf_empty]);
 
 /**
  * Describes the message battle.v1.JoinBattleReq.
@@ -57,18 +57,77 @@ export const SyncFramesReplySchema = /*@__PURE__*/
   messageDesc(file_api_battle_v1_battle_service, 5);
 
 /**
+ * Describes the message battle.v1.IssueEntryTicketReq.
+ * Use `create(IssueEntryTicketReqSchema)` to create a new message.
+ */
+export const IssueEntryTicketReqSchema = /*@__PURE__*/
+  messageDesc(file_api_battle_v1_battle_service, 6);
+
+/**
+ * Describes the message battle.v1.EdgeEndpoint.
+ * Use `create(EdgeEndpointSchema)` to create a new message.
+ */
+export const EdgeEndpointSchema = /*@__PURE__*/
+  messageDesc(file_api_battle_v1_battle_service, 7);
+
+/**
+ * Describes the message battle.v1.BattleTicketEntry.
+ * Use `create(BattleTicketEntrySchema)` to create a new message.
+ */
+export const BattleTicketEntrySchema = /*@__PURE__*/
+  messageDesc(file_api_battle_v1_battle_service, 8);
+
+/**
+ * Describes the message battle.v1.IssueEntryTicketReply.
+ * Use `create(IssueEntryTicketReplySchema)` to create a new message.
+ */
+export const IssueEntryTicketReplySchema = /*@__PURE__*/
+  messageDesc(file_api_battle_v1_battle_service, 9);
+
+/**
  * Describes the message battle.v1.FrameBroadcast.
  * Use `create(FrameBroadcastSchema)` to create a new message.
  */
 export const FrameBroadcastSchema = /*@__PURE__*/
-  messageDesc(file_api_battle_v1_battle_service, 6);
+  messageDesc(file_api_battle_v1_battle_service, 10);
 
 /**
  * Describes the message battle.v1.BattleEndNotify.
  * Use `create(BattleEndNotifySchema)` to create a new message.
  */
 export const BattleEndNotifySchema = /*@__PURE__*/
-  messageDesc(file_api_battle_v1_battle_service, 7);
+  messageDesc(file_api_battle_v1_battle_service, 11);
+
+/**
+ * Describes the message battle.v1.PlayerOutNotify.
+ * Use `create(PlayerOutNotifySchema)` to create a new message.
+ */
+export const PlayerOutNotifySchema = /*@__PURE__*/
+  messageDesc(file_api_battle_v1_battle_service, 12);
+
+/**
+ * Describes the enum battle.v1.EdgeTransport.
+ */
+export const EdgeTransportSchema = /*@__PURE__*/
+  enumDesc(file_api_battle_v1_battle_service, 0);
+
+/**
+ * @generated from enum battle.v1.EdgeTransport
+ */
+export const EdgeTransport = /*@__PURE__*/
+  tsEnum(EdgeTransportSchema);
+
+/**
+ * Describes the enum battle.v1.PlayerOutReason.
+ */
+export const PlayerOutReasonSchema = /*@__PURE__*/
+  enumDesc(file_api_battle_v1_battle_service, 1);
+
+/**
+ * @generated from enum battle.v1.PlayerOutReason
+ */
+export const PlayerOutReason = /*@__PURE__*/
+  tsEnum(PlayerOutReasonSchema);
 
 /**
  * @generated from service battle.v1.BattleService
