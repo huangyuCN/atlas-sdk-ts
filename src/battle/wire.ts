@@ -42,3 +42,17 @@ export function isPlainObject(v: unknown): v is Record<string, unknown> {
   const proto: unknown = Object.getPrototypeOf(v);
   return proto === Object.prototype || proto === null;
 }
+
+/** withBattleId 补齐客体寻址字段：字面量对象合并 battleId（显式值优先），
+ *  生成 DTO 实例原样透传（其 battleId 由调用方设置）。 */
+export function withBattleId(battleId: string, req: unknown): unknown {
+  if (req === undefined || req === null) return { battleId };
+  if (!isPlainObject(req)) return req;
+  return { battleId, ...req };
+}
+
+/** syncRequest 组补帧请求：uint64 按 protojson 约定下发**字符串**。 */
+export function syncRequest(battleId: string, frame: number): Record<string, unknown> {
+  const n = Number.isFinite(frame) && frame > 0 ? Math.trunc(frame) : 0;
+  return { battleId, lastSeenFrame: String(n) };
+}

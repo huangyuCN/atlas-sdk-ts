@@ -32,9 +32,10 @@ import {
   type Settings,
 } from './contract.js';
 import { EdgeTransport, type DirectPlan } from './plan.js';
+import { BattleHeartbeat } from './heartbeat.js';
 import { ticketSlotValue } from './ticket.js';
 import { edgeRejectedError } from './errors.js';
-import { classifyExit, classifyWriteError, frameIdOfProtojson, isPlainObject } from './wire.js';
+import { classifyExit, classifyWriteError, frameIdOfProtojson, syncRequest, withBattleId } from './wire.js';
 
 export type { BattleSession, BattleSessionOptions, BattleSessionState } from './contract.js';
 
@@ -59,6 +60,7 @@ class DirectBattleSession implements BattleSession {
   private readonly pending = new Map<number, Pending>();
   private readonly closeSignal: Promise<void>;
   private signalClose!: () => void;
+  private readonly heartbeat: BattleHeartbeat;
   private transport: ChannelTransport | null = null;
   private current: BattleSessionState = 'connecting';
   private seq = 0;
@@ -82,6 +84,11 @@ class DirectBattleSession implements BattleSession {
     this.ticket = plan.ticket;
     this.slot = ticketSlotValue(plan.ticket);
     this.ver = serializerVersion(this.settings.serializer);
+    this.heartbeat = new BattleHeartbeat({
+      periodMs: this.settings.heartbeatMs,
+      beat: () => this.sendHeartbeat(),
+      onError: (err) => this.reportHeartbeatFailure(err),
+    });
     this.closeSignal = new Promise<void>((resolve) => {
       this.signalClose = resolve;
     });
@@ -101,19 +108,19 @@ class DirectBattleSession implements BattleSession {
 
   async joinBattle(req?: unknown, ...opts: InvokeOption[]): Promise<unknown> {
     this.requireReady();
-    const reply = await this.call(this.settings.ops.joinBattle, this.withBattleId(req), opts);
+    const reply = await this.call(this.settings.ops.joinBattle, withBattleId(this.battleId, req), opts);
     this.joined = true;
     return reply;
   }
 
   async sendFrameInput(req?: unknown, ...opts: InvokeOption[]): Promise<unknown> {
     this.requireReady();
-    return this.call(this.settings.ops.sendFrameInput, this.withBattleId(req), opts);
+    return this.call(this.settings.ops.sendFrameInput, withBattleId(this.battleId, req), opts);
   }
 
   async syncFrames(lastSeenFrame: number = this.lastFrame, ...opts: InvokeOption[]): Promise<unknown> {
     this.requireReady();
-    return this.call(this.settings.ops.syncFrames, this.syncRequest(lastSeenFrame), opts);
+    return this.call(this.settings.ops.syncFrames, syncRequest(this.battleId, lastSeenFrame), opts);
   }
 
   /** reconnect 重新升级并恢复入局状态：已连接时幂等；并发调用共享同一轮尝试。 */
@@ -134,6 +141,7 @@ class DirectBattleSession implements BattleSession {
   async close(): Promise<void> {
     if (this.closing) return;
     this.closing = true;
+    this.heartbeat.stop();
     this.signalClose();
     this.setState('closed');
     const tr = this.transport;
@@ -176,6 +184,7 @@ class DirectBattleSession implements BattleSession {
         await this.restore(isReconnect);
         if (this.transport !== tr) throw new NetworkError('战斗直连在建立后立即断开');
         this.setState('connected');
+        this.heartbeat.start(); // 保活心跳随本代连接启动（换代/关闭即停）
         if (isReconnect) await this.settings.onReconnected?.();
         return;
       } catch (err) {
@@ -232,7 +241,7 @@ class DirectBattleSession implements BattleSession {
     this.restoring = true;
     try {
       await this.call(this.settings.ops.joinBattle, { battleId: this.battleId }, []);
-      if (isReconnect) await this.call(this.settings.ops.syncFrames, this.syncRequest(this.lastFrame), []);
+      if (isReconnect) await this.call(this.settings.ops.syncFrames, syncRequest(this.battleId, this.lastFrame), []);
     } finally {
       this.restoring = false;
     }
@@ -323,6 +332,7 @@ class DirectBattleSession implements BattleSession {
   private onClosed(tr: ChannelTransport, err: unknown): void {
     if (this.transport !== tr) return; // 陈旧代（本地关闭/主动弃用）：不触发重连
     this.transport = null;
+    this.heartbeat.stop(); // 本代死亡即停心跳（不泄漏；重连成功后按新代再启）
     const failure = classifyExit(err);
     this.failPending(failure);
     if (this.closing || this.connecting) return; // 建连中：由 connectOnce 归类与重试
@@ -369,6 +379,34 @@ class DirectBattleSession implements BattleSession {
       this.settle(seq, { kind: 'error', error: classifyWriteError(err) });
     }
     return this.unwrap(await outcome);
+  }
+
+  /** sendHeartbeat 一拍保活：Tell 语义——带会话槽票、不带幂等键、不登记 pending
+   *（回执若到由 settle 静默丢弃，不占待结算表）；未就绪/恢复入局中跳过本轮，
+   *  避免与建连、补帧抢跑。发送失败由 BattleHeartbeat 归口到 onHeartbeatFailed。 */
+  private async sendHeartbeat(): Promise<void> {
+    const tr = this.transport;
+    if (tr === null || this.closing || this.restoring || this.current !== 'connected') return;
+    const payload = this.settings.serializer.marshal(withBattleId(this.battleId, undefined));
+    const body = buildRequestBodyFull(this.settings.ops.ping, this.slot, '', payload);
+    const header: Header = {
+      magic: MAGIC,
+      version: this.ver,
+      type: MsgType.Request,
+      flags: FLAG_SESSION,
+      seq: ++this.seq,
+      length: body.length,
+    };
+    await tr.writeFrame(header, body, this.settings.maxBodySize);
+  }
+
+  /** reportHeartbeatFailure 心跳失败只上报（回调异常隔离）：不改会话状态、不终止会话。 */
+  private reportHeartbeatFailure(err: unknown): void {
+    try {
+      this.settings.onHeartbeatFailed?.(err);
+    } catch {
+      // 回调异常不影响心跳循环
+    }
   }
 
   private registerPending(seq: number, op: string, timeoutMs: number): Promise<PendingOutcome> {
@@ -421,20 +459,6 @@ class DirectBattleSession implements BattleSession {
     if (this.transport === null || this.restoring) {
       throw new NetworkError(`战斗直连未就绪（${this.current}）`);
     }
-  }
-
-  /** withBattleId 补齐客体寻址字段：字面量对象合并 battleId（显式值优先），
-   *  生成 DTO 实例原样透传（其 battleId 由调用方设置）。 */
-  private withBattleId(req: unknown): unknown {
-    if (req === undefined || req === null) return { battleId: this.battleId };
-    if (!isPlainObject(req)) return req;
-    return { battleId: this.battleId, ...req };
-  }
-
-  /** syncRequest 组补帧请求：uint64 按 protojson 约定下发**字符串**。 */
-  private syncRequest(frame: number): Record<string, unknown> {
-    const n = Number.isFinite(frame) && frame > 0 ? Math.trunc(frame) : 0;
-    return { battleId: this.battleId, lastSeenFrame: String(n) };
   }
 
   private setState(s: BattleSessionState): void {

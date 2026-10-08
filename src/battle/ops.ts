@@ -8,6 +8,8 @@ export const BattleOps = {
   joinBattle: '/battle.v1.BattleService/JoinBattle',
   sendFrameInput: '/battle.v1.BattleService/SendFrameInput',
   syncFrames: '/battle.v1.BattleService/SyncFrames',
+  /** 直连保活探针（Tell，无回执）：无输入期间周期发送，维持帧面活跃。 */
+  ping: '/battle.v1.BattleService/Ping',
 } as const;
 
 /** BattlePushOps 战斗域直连推送 op（帧广播 / 战斗结束）。 */
@@ -21,6 +23,7 @@ export interface BattleOpSet {
   joinBattle: string;
   sendFrameInput: string;
   syncFrames: string;
+  ping: string;
   frameBroadcast: string;
   battleEndNotify: string;
 }

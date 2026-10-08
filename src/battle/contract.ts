@@ -7,6 +7,10 @@ import { defaultSerializer, type Serializer } from '../client/serializer.js';
 import type { WebSocketFactory } from '../transport/ws.js';
 import { DEFAULT_BATTLE_OPS, type BattleOpSet } from './ops.js';
 
+/** DEFAULT_HEARTBEAT_MS 直连保活心跳缺省周期（ms）：严格小于 battle 侧空闲读超时
+ *  offline_timeout/3（缺省 15s/3 = 5s），留出一次丢帧与调度抖动的余量。 */
+export const DEFAULT_HEARTBEAT_MS = 2_000;
+
 /** BattleSessionState 战斗直连会话状态。 */
 export type BattleSessionState = 'connecting' | 'connected' | 'reconnecting' | 'failed' | 'closed';
 
@@ -35,6 +39,12 @@ export interface BattleSessionOptions {
   backoffBaseMs?: number;
   /** 重连退避上限（默认 30s）。 */
   backoffMaxMs?: number;
+  /** 直连保活心跳周期（默认 DEFAULT_HEARTBEAT_MS = 2000ms；显式 0 关闭）。
+   *  必须严格小于 battle 侧空闲读超时 = offline_timeout/3（缺省 15s → 5s）：
+   *  无输入期间由心跳帧刷新帧面活跃，超时即被判拆流/掉线。 */
+  heartbeatMs?: number;
+  /** 心跳失败回调（**只上报不终止**：写失败/序列化失败不改会话状态、不触发重连）。 */
+  onHeartbeatFailed?: (err: unknown) => void;
   /** 战斗 op / 推送 op 名覆盖（默认 battle.v1 契约，见 ops.ts）。 */
   ops?: Partial<BattleOpSet>;
   /** 帧广播回调（原始载荷 + 帧头载荷编码版本；ver=2 需生成 DTO 解码）。 */
@@ -91,12 +101,14 @@ export interface Settings {
   reconnectWindowMs: number;
   backoffBaseMs: number;
   backoffMaxMs: number;
+  heartbeatMs: number;
   ops: BattleOpSet;
   onFrame: BattleSessionOptions['onFrame'];
   onBattleEnd: BattleSessionOptions['onBattleEnd'];
   onPush: BattleSessionOptions['onPush'];
   onReconnected: BattleSessionOptions['onReconnected'];
   onFailed: BattleSessionOptions['onFailed'];
+  onHeartbeatFailed: BattleSessionOptions['onHeartbeatFailed'];
   frameNumberOf: BattleSessionOptions['frameNumberOf'];
 }
 
@@ -114,12 +126,14 @@ export function resolveSettings(opts: BattleSessionOptions): Settings {
     reconnectWindowMs: opts.reconnectWindowMs ?? 15_000,
     backoffBaseMs: opts.backoffBaseMs ?? 500,
     backoffMaxMs: opts.backoffMaxMs ?? 30_000,
+    heartbeatMs: opts.heartbeatMs ?? DEFAULT_HEARTBEAT_MS,
     ops: { ...DEFAULT_BATTLE_OPS, ...(opts.ops ?? {}) },
     onFrame: opts.onFrame,
     onBattleEnd: opts.onBattleEnd,
     onPush: opts.onPush,
     onReconnected: opts.onReconnected,
     onFailed: opts.onFailed,
+    onHeartbeatFailed: opts.onHeartbeatFailed,
     frameNumberOf: opts.frameNumberOf,
   };
 }

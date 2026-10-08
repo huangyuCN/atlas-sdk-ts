@@ -136,6 +136,22 @@ export declare type SyncFramesReply = Message<"battle.v1.SyncFramesReply"> & {
 export declare const SyncFramesReplySchema: GenMessage<SyncFramesReply>;
 
 /**
+ * @generated from message battle.v1.PingReq
+ */
+export declare type PingReq = Message<"battle.v1.PingReq"> & {
+  /**
+   * @generated from field: string battle_id = 1;
+   */
+  battleId: string;
+};
+
+/**
+ * Describes the message battle.v1.PingReq.
+ * Use `create(PingReqSchema)` to create a new message.
+ */
+export declare const PingReqSchema: GenMessage<PingReq>;
+
+/**
  * @generated from message battle.v1.IssueEntryTicketReq
  */
 export declare type IssueEntryTicketReq = Message<"battle.v1.IssueEntryTicketReq"> & {
@@ -364,6 +380,14 @@ export declare const BattleService: GenService<{
     methodKind: "unary";
     input: typeof SyncFramesReqSchema;
     output: typeof SyncFramesReplySchema;
+  },
+  /**
+   * @generated from rpc battle.v1.BattleService.Ping
+   */
+  ping: {
+    methodKind: "unary";
+    input: typeof PingReqSchema;
+    output: typeof EmptySchema;
   },
   /**
    * @generated from rpc battle.v1.BattleService.Create

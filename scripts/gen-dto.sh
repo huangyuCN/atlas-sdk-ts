@@ -35,14 +35,16 @@ cp "$ATLAS_DIR/transport/frame/gen/ts/consts.ts" src/frame/gen/consts.ts
 cp "$ATLAS_DIR/transport/frame/gen/ts/codec.ts" src/frame/gen/codec.ts
 echo "帧协议常量/编解码 → src/frame/gen/{consts,codec}.ts"
 
-# 2) 会话协议 descriptor set：模板仓导出（session.proto 导入框架仓的 atlas route 注解，
-#    故必须同时给两个 include 根）。
+# 2) 协议 descriptor set：模板仓导出（session.proto 导入框架仓的 atlas route 注解，
+#    故必须同时给两个 include 根）。除会话/战斗域外还含 game 玩家域——匹配链路
+#    （入队 → 成局推送带票据+接入层地址）的 op 名与 DTO 同源生成，示例不写字面量。
 DESC="$(mktemp -t atlas-gateway-desc.XXXXXX)"
 trap 'rm -f "$DESC"' EXIT
 protoc --descriptor_set_out="$DESC" --include_imports \
   -I "$ATLAS_LAYOUT_DIR" -I "$ATLAS_DIR" \
   "$ATLAS_LAYOUT_DIR/api/gateway/v1/session.proto" \
-  "$ATLAS_LAYOUT_DIR/api/battle/v1/battle_service.proto"
+  "$ATLAS_LAYOUT_DIR/api/battle/v1/battle_service.proto" \
+  "$ATLAS_LAYOUT_DIR/api/game/v1/player_service.proto"
 echo "descriptor set → ${DESC}（模板仓导出）"
 
 # 3) 会话 stub 快照：protoc-gen-atlas-client 的 TS 产物，镜像模板仓目录布局
@@ -56,7 +58,8 @@ node scripts/vendor-session-stub.mjs \
 
 # 4) 冒烟用 schema：以 descriptor set 为输入跑 protoc-gen-es（不 vendored .proto），
 #    产出 ES module + d.ts（examples/*.mjs 直接 node 运行）。列出的文件是
-#    examples 需要的 DTO 及其 import 闭包（未列出的依赖不生成）。
+#    examples 需要的 DTO 及其 import 闭包（未列出的依赖不生成）：会话域、战斗域
+#    （Ping/帧广播/结束/出局）与 game 玩家域（入队/成局推送）。
 rm -rf examples/gen
 mkdir -p examples/gen
 protoc --descriptor_set_in="$DESC" \
@@ -67,7 +70,11 @@ protoc --descriptor_set_in="$DESC" \
   api/atlas/v1/route.proto \
   api/battle/v1/battle_service.proto \
   api/battle/v1/battle.proto \
-  api/lockstep/lockstep.proto
+  api/lockstep/lockstep.proto \
+  api/game/v1/player_service.proto \
+  api/game/v1/player.proto \
+  api/matcher/v1/matcher.proto \
+  api/matcher/v1/match_events.proto
 echo "冒烟 schema → examples/gen/api/**"
 
 # 改动计数排除 CI 检出的上游目录（它们不是本仓产物，见 workflow 门禁同款 pathspec）。
