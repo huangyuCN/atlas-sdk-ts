@@ -70,8 +70,11 @@ export {
 export { BattleOps, BattlePushOps, DEFAULT_BATTLE_OPS, type BattleOpSet } from './battle/ops.js';
 export { ticketSlotValue } from './battle/ticket.js';
 export {
+  BATTLE_ENDED_CODE,
+  BATTLE_ENDED_REASON,
   BATTLE_TICKET_EXPIRED_REASON,
   BATTLE_TICKET_INVALID_REASON,
+  isBattleEnded,
   isBattleTicketExpired,
   isBattleTicketRejected,
   isEdgeRejected,

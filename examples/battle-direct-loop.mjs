@@ -6,7 +6,10 @@
 //   2) 按 EDGE_TRANSPORT_WS 取接入层地址，**经接入层直连**（升级 URL 带 base64url 票据，
 //      逐帧会话槽带同一张票）跑 JoinBattle → SendFrameInput → SyncFrames → 收帧广播；
 //   3) 保活验收：局中「只发心跳、不发输入」的静默窗口（A 心跳在线），断言未被判出局、
-//      窗口后仍能发帧/补帧；同参数对照 B（心跳关闭）观察是否掉线。
+//      窗口后仍能发帧/补帧；同参数对照 B（心跳关闭）观察是否掉线；
+//   4) 结束收口验收（A3）：跑到对局自然结束（帧上限），断言结束后**零上发**（新增线上帧数
+//      为 0，含心跳 Ping）且结束回调**恰一次**（服务端结算有界重投 + 重连补投会重复投递），
+//      并断言会话终态可判定（state()='ended' / ended()=true）。
 //
 // 观测手段：wsFactory 包装真实 WebSocket，按线上字节解码**客户端发出的每一帧**
 //   （readFrameFrom + parseRequestBodyFull，与 SDK 同一份实现）——「只发心跳」不是推断，
@@ -18,6 +21,7 @@
 // 依赖 dist 产物：先 npx tsup。
 import {
   BattleOps,
+  BattlePushOps,
   CLIENT_VERSION,
   isEdgeRejected,
   MsgType,
@@ -46,6 +50,8 @@ const TICK_MS = Number(arg('tick-ms', '100')); // battle 帧间隔缺省
 const RULESET = arg('ruleset', 'casual');
 const PASSWORD = 'pw-123456';
 const OP_OUT = `/${PlayerOutNotifySchema.typeName}`;
+/** 结束通知 op（推送按消息完整名寻址；SDK 契约里的 battle.v1 推送 op）。 */
+const OP_END = BattlePushOps.battleEndNotify;
 
 const T0 = Date.now();
 const log = (...a) => console.log(...a);
@@ -151,16 +157,30 @@ async function enqueue(player) {
 /** openDirect 经接入层直连（升级带票）+ JoinBattle（autoJoin 关，拿 currentFrame）。 */
 async function openDirect(player, heartbeatMs) {
   const rec = wireRecorder();
-  const stats = { tag: player.tag, frames: [], pushes: [], battleEndAt: null, failedAt: null, failedErr: null, hbFailures: [] };
+  const stats = {
+    tag: player.tag,
+    frames: [],
+    pushes: [],
+    endCount: 0,
+    endPushes: 0,
+    battleEndAt: null,
+    failedAt: null,
+    failedErr: null,
+    hbFailures: [],
+  };
   const session = await openBattleSession(player.plan, {
     heartbeatMs,
     autoReconnect: false,
     wsFactory: rec.factory,
     onFrame: () => stats.frames.push(Date.now()),
     onBattleEnd: () => {
-      stats.battleEndAt = Date.now();
+      stats.battleEndAt ??= Date.now(); // 首份结算到达时刻（重复投递不改写）
+      stats.endCount += 1; // 结算回调次数：重复投递下必须仍为 1
     },
-    onPush: (op) => stats.pushes.push({ t: Date.now(), op }),
+    onPush: (op) => {
+      stats.pushes.push({ t: Date.now(), op });
+      if (op === OP_END) stats.endPushes += 1; // 线上收到的结束通知**份数**（含重复投递）
+    },
     onFailed: (err) => {
       stats.failedAt = Date.now();
       stats.failedErr = err;
@@ -279,6 +299,47 @@ async function observeNaturalEnd(da, db, silenceAt) {
   );
 }
 
+/**
+ * verifyEndQuiescence 结束收口验收（A3）：对局结束服务端已就绪的语义是——
+ *   ① 已结束对局的迟到帧 op（含心跳 Ping）一律回 BATTLE_ENDED（409）；
+ *   ② 结算结果可能重复投递（结算关闭前有界重投 2 次 + 重连补投最多 5 次）。
+ * 故客户端必须：收到结束通知即**停止发送**（帧输入 / SyncFrames / 心跳），且结束回调**恰一次**。
+ * 判据全部取自线上字节与回调计数：结束后窗口内的新增上发帧数、结束回调累计次数、会话终态。
+ */
+async function verifyEndQuiescence(da, db, windowMs = 2_500) {
+  if (da.stats.battleEndAt === null) {
+    log('[收口] 观察窗内未收到结束通知：跳过结束收口验收');
+    return { checked: false, ok: true };
+  }
+  const sentAtEnd = da.rec.sent.length;
+  const endCountAtEnd = da.stats.endCount;
+  await sleep(windowMs); // 覆盖 ≥1 个心跳周期 + 收尾窗口（缺省 2s）
+  const late = da.rec.sent.slice(sentAtEnd);
+  const lateOps = [...new Set(late.map((f) => f.op))];
+  // 对照 B 只在「确实收到过结束通知」时才强制恰一次（B 关心跳，掉线与否不影响本判据）。
+  const bEndOk = db.stats.battleEndAt === null || db.stats.endCount === 1;
+  const ok =
+    late.length === 0 && // 结束后零写入（含心跳 Ping）
+    endCountAtEnd === 1 && // 首份结算即回调（重复副本不回调）
+    da.stats.endCount === 1 && // 窗口内也没有第二次
+    bEndOk &&
+    da.session.ended() &&
+    da.session.state() === 'ended';
+  log(
+    `[收口] 结束通知线上份数：A=${da.stats.endPushes} 份/B=${db.stats.endPushes} 份 → 业务回调 A=${da.stats.endCount} 次/B=${db.stats.endCount} 次` +
+      `${da.stats.endPushes > 1 ? '（重复投递已被幂等去重）' : '（本次未观察到重复投递）'}`,
+  );
+  log(
+    `[收口] 对局结束后 ${(windowMs / 1000).toFixed(1)}s 内：A 新增上发 ${late.length} 帧` +
+      `${late.length > 0 ? `（${lateOps.join('、')}）` : ''}；A 状态=${da.session.state()} ended=${da.session.ended()}`,
+  );
+  log(
+    `结束收口验收${ok ? '通过' : '未通过'}：结束后零上发=${late.length === 0}；` +
+      `结果只回调一次=${endCountAtEnd === 1 && da.stats.endCount === 1}；终态可判定=${da.session.ended()}`,
+  );
+  return { checked: true, ok, late: late.length, endCount: da.stats.endCount, endPushes: da.stats.endPushes };
+}
+
 /** measureSilence 统计静默窗口内的线上帧计数与「距最后一次输入 ≥ 阈值」后的帧广播数。 */
 function measureSilence(da, silenceAt) {
   const inputs = da.rec.sent.filter((f) => f.op === BattleOps.sendFrameInput);
@@ -313,6 +374,7 @@ async function keepaliveOnce(tag) {
   );
   const resumed = await resumeAfterSilence(da, silenceAt);
   await observeNaturalEnd(da, db, silenceAt);
+  const quiesce = await verifyEndQuiescence(da, db); // A3：结束后停发 + 结果恰一次
   const dDrop = db.stats.failedAt === null ? null : db.stats.failedAt - silenceAt;
   log(
     `[保活] 对照 B（心跳关闭）：${dDrop === null ? '同窗口内未掉线' : `静默 ${(dDrop / 1000).toFixed(1)}s 后被拆流：${db.stats.failedErr?.message}`}` +
@@ -337,6 +399,7 @@ async function keepaliveOnce(tag) {
     hbFailures: da.stats.hbFailures.length,
     resumed,
     dDrop,
+    quiesce,
   };
 }
 
@@ -357,6 +420,7 @@ function reportKeepalive(k) {
   const survived = k.aFailedAt === null || (k.aEndedAt !== null && k.aEndedAt <= k.aFailedAt);
   const ok =
     k.pings > 0 && k.inputs === 0 && k.aOut === false && k.hbFailures === 0 && survived && (k.afterThreshold > 0 || crossed);
+  const endOk = k.quiesce.checked ? k.quiesce.ok : true; // 对局没在观察窗内结束时不计入
   log(
     `保活验收${ok ? '通过' : '未通过'}：心跳在线玩家静默 ${(k.windowMs / 1000).toFixed(1)}s（只发心跳 ${k.pings} 条、输入 0 条）` +
       `未被判出局；跨过 ${IDLE_MS}ms 空闲阈值=${crossed}（阈值后仍收到帧广播 ${k.afterThreshold} 条）；` +
@@ -374,7 +438,7 @@ function reportKeepalive(k) {
         `（battle 硬缺省、无配置项），单局内可观察静默上限小于 8s。`,
     );
   }
-  return ok;
+  return ok && endOk;
 }
 
 async function main() {

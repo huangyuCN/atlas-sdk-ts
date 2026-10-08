@@ -11,8 +11,16 @@ import { DEFAULT_BATTLE_OPS, type BattleOpSet } from './ops.js';
  *  offline_timeout/3（缺省 15s/3 = 5s），留出一次丢帧与调度抖动的余量。 */
 export const DEFAULT_HEARTBEAT_MS = 2_000;
 
-/** BattleSessionState 战斗直连会话状态。 */
-export type BattleSessionState = 'connecting' | 'connected' | 'reconnecting' | 'failed' | 'closed';
+/** DEFAULT_DRAIN_MS 对局结束后的收尾窗口缺省值（ms）。取值依据（服务端已就绪的语义）：
+ *  结算关闭前的有界重投（EndRetries=2）与最后一帧都在同一 tick 内发出，一个 RTT 即可到达；
+ *  留 2s ≈ 一个心跳周期，足以覆盖调度抖动与慢链路；又远小于留档 TTL（票据有效期 + 掉线窗口），
+ *  不会让已结束的连接长期悬挂。流式面（WS/KCP）服务端会先关，客户端通常先收到断开事件，
+ *  本窗口主要兜底数据报面（没有关闭事件）与断开信号丢失的情形。 */
+export const DEFAULT_DRAIN_MS = 2_000;
+
+/** BattleSessionState 战斗直连会话状态。'ended' 是**终态**：对局已结束（收到结束通知或
+ *  BATTLE_ENDED 业务拒绝）——心跳与业务发帧全部停止，连接在收尾窗口到点后释放。 */
+export type BattleSessionState = 'connecting' | 'connected' | 'reconnecting' | 'ended' | 'failed' | 'closed';
 
 /** BattleSessionOptions 直连会话配置（全部可选，缺省即生产默认值）。 */
 export interface BattleSessionOptions {
@@ -45,11 +53,18 @@ export interface BattleSessionOptions {
   heartbeatMs?: number;
   /** 心跳失败回调（**只上报不终止**：写失败/序列化失败不改会话状态、不触发重连）。 */
   onHeartbeatFailed?: (err: unknown) => void;
+  /** 收尾窗口（默认 DEFAULT_DRAIN_MS = 2000ms；显式 0 = 收到结束通知即释放连接）。
+   *  收到结束通知/ BATTLE_ENDED 后**立刻停发**（业务帧 + 心跳），但连接保留本窗口以读完
+   *  服务端在关闭前重投/补齐的结果推送；窗口到点（或服务端先关）即释放。 */
+  drainMs?: number;
   /** 战斗 op / 推送 op 名覆盖（默认 battle.v1 契约，见 ops.ts）。 */
   ops?: Partial<BattleOpSet>;
   /** 帧广播回调（原始载荷 + 帧头载荷编码版本；ver=2 需生成 DTO 解码）。 */
   onFrame?: (payload: Uint8Array, version: number) => void;
-  /** 战斗结束回调（原始载荷 + 版本）。 */
+  /** 战斗结束回调（原始载荷 + 版本）。**同一局只触发一次**：服务端结算关闭前的有界重投
+   *  （EndRetries=2）与重连补投（每玩家最多 5 次）都会让同一份通知重复到达，重复副本不再
+   *  回调（**载荷逐字一致**；若出现不一致副本，以先到者为准——结算不可改判）。重复副本仍会
+   *  经 onPush 透传，需要逐份留档/上报的调用方请在那条通道上做。 */
   onBattleEnd?: (payload: Uint8Array, version: number) => void;
   /** 任意战斗域推送回调（op 原样透传；帧广播/结束也会走这里）。 */
   onPush?: (op: string, payload: Uint8Array, version: number) => void;
@@ -70,8 +85,13 @@ export interface BattleSession {
   readonly battleId: string;
   /** 实际拨号的接入层 WS 面地址（host:port，只来自本局推送）。 */
   readonly address: string;
-  /** 当前状态。 */
+  /** 当前状态（'ended' 为终态：心跳与业务发帧已停，连接在收尾窗口到点后释放）。 */
   state(): BattleSessionState;
+  /** ended 对局是否已结束（终态判定）：收到结束通知或 BATTLE_ENDED 业务拒绝后**永久为真**
+   *  ——即便之后 close()（state 转 'closed'）或连接被回收，也能判定「这一局是打完了」。
+   *  为真时一切上发（帧输入 / SyncFrames / JoinBattle / 心跳 / 重连）都被本地以
+   *  BATTLE_ENDED 拒绝，不写线。 */
+  ended(): boolean;
   /** 已见帧号（帧广播自动推进；重连补帧的 last_seen_frame）。 */
   lastSeenFrame(): number;
   /** 上报已见帧号（调用方自解帧广播载荷时用；只前进不后退）。 */
@@ -102,6 +122,7 @@ export interface Settings {
   backoffBaseMs: number;
   backoffMaxMs: number;
   heartbeatMs: number;
+  drainMs: number;
   ops: BattleOpSet;
   onFrame: BattleSessionOptions['onFrame'];
   onBattleEnd: BattleSessionOptions['onBattleEnd'];
@@ -127,6 +148,7 @@ export function resolveSettings(opts: BattleSessionOptions): Settings {
     backoffBaseMs: opts.backoffBaseMs ?? 500,
     backoffMaxMs: opts.backoffMaxMs ?? 30_000,
     heartbeatMs: opts.heartbeatMs ?? DEFAULT_HEARTBEAT_MS,
+    drainMs: opts.drainMs ?? DEFAULT_DRAIN_MS,
     ops: { ...DEFAULT_BATTLE_OPS, ...(opts.ops ?? {}) },
     onFrame: opts.onFrame,
     onBattleEnd: opts.onBattleEnd,
