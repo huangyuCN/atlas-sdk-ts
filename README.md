@@ -37,12 +37,22 @@ ESM / CJS / d.ts 三种形态），面向游戏客户端、机器人与工具脚
 
 ## 安装
 
-npm 包尚未发布，当前可克隆构建或以 git 依赖使用：
+已发布到 npm（包版本即本仓 `package.json` 的 `version`，随本仓版本走）：
+
+```bash
+npm i @huangyucn/atlas-sdk-ts@0.7.0     # pnpm add / yarn add 同义
+```
+
+也可克隆构建或以 git 依赖使用：
 
 ```bash
 git clone https://github.com/huangyuCN/atlas-sdk-ts
 cd atlas-sdk-ts && pnpm install && pnpm build   # 产物在 dist/
 ```
+
+子入口按需引入：主入口 `@huangyucn/atlas-sdk-ts`（协议层 + 内核 + WebSocket，零 protobuf
+运行时依赖）、`@huangyucn/atlas-sdk-ts/node`（Node TCP/UDP 通道）、
+`@huangyucn/atlas-sdk-ts/protobuf`（基于 `@bufbuild/protobuf` 的二进制序列化器，ver=2）。
 
 ## 快速开始
 
@@ -253,7 +263,9 @@ bash scripts/gen-dto.sh   # 从上游生成物刷新协议事实（帧常量/会
 - [x] v0.3：通道传输（WebSocket 全平台 / Node TCP、UDP）
 - [x] v0.4：真服务端端到端验收（注册/登录/匹配/战斗/结算闭环）
 - [x] v0.5：发布工程 + 二进制 protobuf 演进（打样就绪）
-- [x] v0.6：战斗帧直连（阶段 3：凭票据经接入层直连 WS 面 + 保活/结束收口，跨机验收通过）
+- [x] v0.6：战斗帧直连（阶段 3：凭票据经接入层直连 WS 面，跨机验收通过）
+- [x] v0.7：直连上线 npm（保活心跳 + 对局结束语义收口 + 评审 P0/P1 修复；**破坏性**：
+  战斗帧改直连、老客户端须升级，详见 [CHANGELOG](CHANGELOG.md)）
 
 ## License
 

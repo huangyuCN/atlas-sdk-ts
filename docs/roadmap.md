@@ -164,6 +164,21 @@
   golden vectors 二进制形态用例（atlas 主仓向量包先加形态、两侧再消费）与生成器产
   op → input/output schema 映射（kernel resp-target 全自动绑定）属后续批次。
 
+## v0.6 / v0.7：战斗帧直连与 npm 发布（2026-10-09）
+
+版本线：`0.6.0`（2026-09-28 首版发布到 npm）→ **`0.7.0`（本批次，发布后为 npm `latest`）**。
+
+- **v0.6（0.6.0 已发布）**：战斗帧凭票据直连接入层 WS 面（阶段 3，网关不再承载战斗帧），
+  跨机 WS 闭环验收通过；
+- **v0.7（0.7.0）**：直连保活心跳（`heartbeatMs` 缺省 2000ms）+ 对局结束语义收口
+  （终态停发 / 结束通知幂等 / 2s 收尾窗口）+ 评审 P0/P1 修复（close 竞态、终态族、
+  心跳被拒三分类、`stats()` 口径拆分）+ 生成物跟随模板 proto 刷新；
+- **破坏性**：0.7.0 起战斗帧只走直连（**老客户端须升级**），结束/终态语义与 `stats()`
+  字段口径有变——完整清单见 [CHANGELOG](../CHANGELOG.md)；
+- 发布口径：包名 `@huangyucn/atlas-sdk-ts`（public scope，`npm publish --access public`）；
+  `files` 只含 `dist` + README/LICENSE，**发布前必须 `pnpm build`**（`CLIENT_VERSION` 由
+  构建期从 `package.json` 注入产物，未重建会带上旧版本号）。
+
 ## 后续（随规范路线）
 
 - C# 仓（规范 P3）跟进后，跨仓 CI 机器人（向量更新 PR + 每日冒烟，规范 P5）。

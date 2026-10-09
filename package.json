@@ -1,6 +1,6 @@
 {
   "name": "@huangyucn/atlas-sdk-ts",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Atlas 帧协议的 TypeScript 客户端 SDK：帧编解码 + 运行时内核 + WebSocket/TCP/UDP 通道（浏览器与 Node 双目标）",
   "type": "module",
   "license": "Apache-2.0",
@@ -30,6 +30,7 @@
   "files": [
     "dist",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "scripts": {
@@ -37,7 +38,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "bench": "vitest bench",
-    "check": "tsc --noEmit && vitest run"
+    "check": "tsc --noEmit && vitest run",
+    "prepublishOnly": "pnpm build"
   },
   "devDependencies": {
     "@bufbuild/protoc-gen-es": "2.14.1",
