@@ -72,12 +72,23 @@ export { ticketSlotValue } from './battle/ticket.js';
 export {
   BATTLE_ENDED_CODE,
   BATTLE_ENDED_REASON,
+  BATTLE_FULL_CODE,
+  BATTLE_FULL_REASON,
+  BATTLE_NOT_FOUND_CODE,
+  BATTLE_NOT_FOUND_REASON,
   BATTLE_TICKET_EXPIRED_REASON,
   BATTLE_TICKET_INVALID_REASON,
+  FRAME_TARGET_MISMATCH_CODE,
+  FRAME_TARGET_MISMATCH_REASON,
+  LOCAL_SETTLED_KEY,
   isBattleEnded,
+  isBattleFull,
+  isBattleNotFound,
+  isBattleTerminalReject,
   isBattleTicketExpired,
   isBattleTicketRejected,
   isEdgeRejected,
+  isFrameTargetMismatch,
 } from './battle/errors.js';
 export {
   openBattleSession,
@@ -85,6 +96,7 @@ export {
   type BattleSessionOptions,
   type BattleSessionState,
 } from './battle/session.js';
+export type { BattleSessionStats } from './battle/stats.js';
 export {
   TransportKind,
   createMockTransport,

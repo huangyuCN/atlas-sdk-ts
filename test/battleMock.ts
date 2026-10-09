@@ -10,6 +10,7 @@ import {
   parseRequestBodyFull,
   readFrameFrom,
   type Header,
+  type Status,
   type WebSocketFactory,
   type WebSocketLike,
 } from '../src/index.js';
@@ -101,6 +102,13 @@ export class MockBattleServer {
     this.ws.serverFrame(concatFrameV(MsgType.Response, this.seqOfLast, body, version));
   }
 
+  /** replyStatusOf 回完整 Status 的业务拒绝回执（code/reason/message/class/metadata 自定）：
+   *  三 SDK 一致性用例要按「终态族 vs 票类 vs 其它」的 class 与 metadata 口径逐字构造回执。 */
+  replyStatusOf(status: Status, version = 1): void {
+    const st = buildTestStatus(status.code, status.reason, status.message, status.metadata ?? null, status.class);
+    this.ws.serverFrame(concatFrameV(MsgType.Response, this.seqOfLast, buildReplyErr(st, new Uint8Array(0)), version));
+  }
+
   /** 服务端推送（op 为消息完整名寻址；载荷为原始字节）。 */
   notify(op: string, payload: Uint8Array = new Uint8Array(0), version = 1): void {
     this.ws.serverFrame(concatFrameV(MsgType.Notify, ++this.pushSeq, buildRequestBody(op, payload), version));
@@ -188,4 +196,12 @@ export function makeBattleFactory(
 /** jsonBytes 把对象编码为 protojson 风格的载荷字节（测试构造用）。 */
 export function jsonBytes(obj: unknown): Uint8Array {
   return bytesOf(JSON.stringify(obj));
+}
+
+/** isOpFrame 判定一段线上字节是否为指定 op 的请求帧（flags 感知解帧，与客户端同构）。 */
+export function isOpFrame(data: ArrayBuffer | Uint8Array, op: string): boolean {
+  const bytes = data instanceof ArrayBuffer ? new Uint8Array(data) : data;
+  const r = readFrameFrom(bytes, 0);
+  if (!r.ok || r.header.type !== MsgType.Request) return false;
+  return parseRequestBodyFull(r.body, r.header.flags ?? 0).operation === op;
 }

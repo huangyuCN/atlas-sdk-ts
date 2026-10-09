@@ -10,7 +10,8 @@ ESM / CJS / d.ts 三种形态），面向游戏客户端、机器人与工具脚
 
 > **当前状态**：协议层、运行时内核（请求匹配、推送订阅、双层心跳、断线重连、
 > dual 双通道编排）与通道传输（浏览器/Cocos WebSocket、Node TCP/UDP）均可用；
-> 真网关端到端验收进行中，见 [roadmap](docs/roadmap.md)。
+> **战斗帧直连**（阶段 3：凭票据直连接入层，不再经网关）已落地并通过跨机 WS 闭环验收，
+> 见 [roadmap](docs/roadmap.md)。
 
 ## 特性
 
@@ -108,6 +109,84 @@ socket.on('data', (chunk: Uint8Array) => {
 });
 ```
 
+## 战斗帧直连（阶段 3）
+
+阶段 3 起，**战斗帧不走网关**：客户端凭「接入层地址 + 战斗票据」直连接入层（L4 转发器），
+网关只剩单一业务通道（登录/匹配等 op 调用）。两条链路分工如下：
+
+| 链路 | 承载 | 入口 | 身份凭据 |
+|------|------|------|---------|
+| 业务通道 | 会话/匹配等 op（请求-响应） | 网关（`newWSClient(gateway)`） | 会话令牌（登录后） |
+| 战斗帧直连 | `JoinBattle` / `SendFrameInput` / `SyncFrames` / 帧广播 / 结算推送 | **接入层**（地址来自本局推送） | 本局 `battle_ticket` |
+
+口径要点（与 Go / C# SDK 一致）：
+
+- **地址唯一来源是本局推送**：成局推送（`MatchStartedNotify`，op 为**消息完整名**
+  `/game.v1.MatchStartedNotify`）携带 `battle_ticket` 与 `endpoints[]`；SDK 不读本地配置、
+  不猜端口、不换面——缺本 SDK 支持的面（浏览器只有 `EDGE_TRANSPORT_WS`）即明确报错，
+  `EDGE_TRANSPORT_UNSPECIFIED` 一律拒绝（proto 明示不得下发）。
+- **一张票两处用**：WS 升级 query `?ticket=<base64url>`（接入层据此验票并选后端）+
+  每个战斗帧的**会话槽**带同一张票（battle 侧据此认人）。票据不含后端地址，属主迁移后
+  同一张票仍能跟到新属主。
+- **零 protobuf 运行时依赖**：推送与回执按帧头 `version` 分派（1 = protojson、2 = 二进制）；
+  直连路径不需要 DTO 也能跑通（需要结构化字段时再用生成 DTO）。
+- **保活**：`heartbeatMs`（缺省 2000ms）周期发 `Ping`（Tell，无回执）；心跳失败只上报，
+  绝不终止会话。
+
+### 直连示例
+
+```ts
+import {
+  openBattleSession, parseDirectPlan, isBattleTerminalReject, isBattleTicketRejected,
+} from '@huangyucn/atlas-sdk-ts';
+
+// ① 业务链路（网关）：入队匹配 → 等成局推送（推送 op = 消息完整名）
+client.on('/game.v1.MatchStartedNotify', (_op, payload) => {
+  void openBattleSession(parseDirectPlan(payload), {
+    heartbeatMs: 2000,                                   // 保活（显式 0 关闭）
+    onFrame: (payload, version) => { /* 帧广播（按 version 解码） */ },
+    onBattleEnd: (payload) => { /* 结算结果：同一局恰一次（重复投递已幂等） */ },
+    onFailed: (err) => {
+      // 不可重试终止（含终态族业务拒绝：对局不存在/已满/目标不一致）→ 回匹配链路
+      if (isBattleTerminalReject(err)) { /* 终态族：这一局已无用，不重连 */ }
+    },
+    onHeartbeatFailed: (err) => {
+      // 心跳写失败，或心跳回执被业务拒绝；票类信号在此判定：
+      if (isBattleTicketRejected(err)) { /* 需回业务链路重新取票（自动重取票由上层做） */ }
+    },
+  }).then(async (s) => {
+    await s.joinBattle();                                  // 显式入局（缺省 autoJoin 已在建连内完成；可取回 currentFrame）
+    await s.sendFrameInput({ input: { frameId: '1' } });    // 上行帧输入
+    await s.syncFrames();                                  // 补帧（按 lastSeenFrame）
+    console.log(s.stats());                                // 重连/握手/心跳失败只读统计
+  });
+});
+```
+
+### 终态与错误判定
+
+| 情形 | 判定入口 | 会话行为 |
+|------|---------|---------|
+| 对局已结束（`BATTLE_ENDED` / 结算推送） | `isBattleEnded(err)`、`ended()` | 停发（业务帧 + 心跳），收尾窗口内继续收结果，窗口到点释放连接 |
+| 对局不存在 / 已满 / 票面对局与正文目标不一致（`BATTLE_NOT_FOUND` / `BATTLE_FULL` / `FRAME_TARGET_MISMATCH`） | `isBattleTerminalReject(err)`（族判定）、`isBattleNotFound` / `isBattleFull` / `isFrameTargetMismatch` | **不可重试终态**：停发、释放连接、`onFailed` 上报一次；在途请求立即以终态 `Status` 结算 |
+| 票无效 / 过期（`BATTLE_TICKET_INVALID` / `BATTLE_TICKET_EXPIRED`） | `isBattleTicketRejected(err)`、`isBattleTicketExpired(err)` | **不终态**：上报可判定信号，由上层回业务链路重新取票（SDK 不自动重取票） |
+| 接入层拒连（升级被断/无回执） | `isEdgeRejected(err)` | 不可重试：票可能已失效，回业务链路重新取票 |
+| 纯网络断开 | `NetworkError`（`retryable=true`） | 退避重连（窗口 `reconnectWindowMs`，用尽即判拒连） |
+
+> 终态两族的语义分界（三 SDK 一致）：**`ended` 表示对局正常结束、有结算可展示**；
+> **`failed` 表示无结算的终态拒绝**——两者的区别就是「有没有结算可展示」，上层据此决定
+> 是否去取结算数据（对 `failed` 取结算只会拿到不存在的数据）。判定入口：
+> `ended()` / `isBattleEnded(err)` 对第一族，`isBattleTerminalReject(err)` 对两族（族内细分
+> 用 `isBattleNotFound` / `isBattleFull` / `isFrameTargetMismatch`）。
+
+`stats()` 给出只读快照：`dialAttempts` / `dialFailures`（握手）/ `reconnects`（重连成功）/
+`heartbeatWriteFailures` / `heartbeatRejected` / `heartbeatTicketRejected` /
+`lastHeartbeatRejectReason` / `terminalRejects`（终态总数）/
+`endedRejects`（对局正常结束，有结算）/ `fatalRejects`（无结算的终态拒绝）。
+
+跨机验收驱动：`node examples/battle-direct-loop.mjs --gateway <host:port>`
+（业务链路取票 → 经接入层直连 → 发帧/补帧/收广播 → 保活与结束收口逐帧断言）。
+
 ## 兼容性
 
 | 运行环境 | 协议层 | 内核 | 通道传输 |
@@ -172,7 +251,9 @@ bash scripts/gen-dto.sh   # 从上游生成物刷新协议事实（帧常量/会
 - [x] v0.1：协议层帧编解码 + golden 对齐 + 引擎宿主兼容加固
 - [x] v0.2：运行时内核（Invoke 请求匹配、Notify 订阅、双层心跳、重连与 dual 编排）
 - [x] v0.3：通道传输（WebSocket 全平台 / Node TCP、UDP）
-- [ ] v0.4：真服务端到端验收（注册/登录/匹配/战斗/结算闭环）
+- [x] v0.4：真服务端端到端验收（注册/登录/匹配/战斗/结算闭环）
+- [x] v0.5：发布工程 + 二进制 protobuf 演进（打样就绪）
+- [x] v0.6：战斗帧直连（阶段 3：凭票据经接入层直连 WS 面 + 保活/结束收口，跨机验收通过）
 
 ## License
 

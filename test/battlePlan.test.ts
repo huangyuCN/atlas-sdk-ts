@@ -109,14 +109,29 @@ describe('parseDirectPlan 成局通知解析', () => {
     expect(plan.endpoints.get(EdgeTransport.Ws)).toBe('10.0.0.9:7100');
   });
 
+  it('EDGE_TRANSPORT_UNSPECIFIED 条目 → ProtocolError（proto 明示不得下发，不静默忽略）', () => {
+    const only = notifyPayload({
+      endpoints: [{ transport: 'EDGE_TRANSPORT_UNSPECIFIED', address: '10.0.0.9:7100' }],
+    });
+    expect(() => parseDirectPlan(only)).toThrow(ProtocolError);
+    // 与已知 WS 面并存时同样拒绝：未指定面本身就是协议违背，不是「可忽略的未知面」。
+    const mixed = notifyPayload({
+      endpoints: [
+        { transport: 'EDGE_TRANSPORT_WS', address: '10.0.0.9:7100' },
+        { transport: 'EDGE_TRANSPORT_UNSPECIFIED', address: '10.0.0.9:7101' },
+      ],
+    });
+    expect(() => parseDirectPlan(mixed)).toThrow(/EDGE_TRANSPORT_UNSPECIFIED/);
+  });
+
   it('payload 不是 JSON 对象 → ProtocolError', () => {
     expect(() => parseDirectPlan('{oops')).toThrow(ProtocolError);
     expect(() => parseDirectPlan('[]')).toThrow(ProtocolError);
   });
 
-  it('isMatchStartedNotifyOp 同时接受消息完整名与服务限定名', () => {
+  it('isMatchStartedNotifyOp 只接受消息完整名（服务限定名是 RPC 口径，推送按消息寻址）', () => {
     expect(isMatchStartedNotifyOp('/game.v1.MatchStartedNotify')).toBe(true);
-    expect(isMatchStartedNotifyOp('/game.v1.PlayerService/MatchStartedNotify')).toBe(true);
+    expect(isMatchStartedNotifyOp('/game.v1.PlayerService/MatchStartedNotify')).toBe(false);
     expect(isMatchStartedNotifyOp('/game.v1.MatchFailedNotify')).toBe(false);
   });
 });

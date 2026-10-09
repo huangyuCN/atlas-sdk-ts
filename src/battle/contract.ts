@@ -6,6 +6,7 @@ import type { InvokeOption } from '../client/options.js';
 import { defaultSerializer, type Serializer } from '../client/serializer.js';
 import type { WebSocketFactory } from '../transport/ws.js';
 import { DEFAULT_BATTLE_OPS, type BattleOpSet } from './ops.js';
+import type { BattleSessionStats } from './stats.js';
 
 /** DEFAULT_HEARTBEAT_MS 直连保活心跳缺省周期（ms）：严格小于 battle 侧空闲读超时
  *  offline_timeout/3（缺省 15s/3 = 5s），留出一次丢帧与调度抖动的余量。 */
@@ -18,8 +19,12 @@ export const DEFAULT_HEARTBEAT_MS = 2_000;
  *  本窗口主要兜底数据报面（没有关闭事件）与断开信号丢失的情形。 */
 export const DEFAULT_DRAIN_MS = 2_000;
 
-/** BattleSessionState 战斗直连会话状态。'ended' 是**终态**：对局已结束（收到结束通知或
- *  BATTLE_ENDED 业务拒绝）——心跳与业务发帧全部停止，连接在收尾窗口到点后释放。 */
+/** BattleSessionState 战斗直连会话状态。两个终态按「**有没有结算可展示**」分界：
+ *  'ended' = 对局**正常结束**（收到结束通知或 BATTLE_ENDED 业务拒绝）——停发，收尾窗口内
+ *  继续读结果，窗口到点释放连接，结算数据可展示；
+ *  'failed' = **无结算的终态拒绝**（BATTLE_NOT_FOUND / BATTLE_FULL / FRAME_TARGET_MISMATCH
+ *  等不可重试拒绝，或协议致命/重连窗口用尽）——停发并释放连接，经 onFailed 上报，
+ *  此时**没有结算可展示**（上层不该去取结算数据）。 */
 export type BattleSessionState = 'connecting' | 'connected' | 'reconnecting' | 'ended' | 'failed' | 'closed';
 
 /** BattleSessionOptions 直连会话配置（全部可选，缺省即生产默认值）。 */
@@ -90,7 +95,8 @@ export interface BattleSession {
   /** ended 对局是否已结束（终态判定）：收到结束通知或 BATTLE_ENDED 业务拒绝后**永久为真**
    *  ——即便之后 close()（state 转 'closed'）或连接被回收，也能判定「这一局是打完了」。
    *  为真时一切上发（帧输入 / SyncFrames / JoinBattle / 心跳 / 重连）都被本地以
-   *  BATTLE_ENDED 拒绝，不写线。 */
+   *  BATTLE_ENDED 拒绝，不写线。**语义分界**：ended ⇒ 有结算可展示；无结算的终态拒绝
+   *  （对局不存在/已满/目标不一致）走 state()='failed' + onFailed，ended() 保持 false。 */
   ended(): boolean;
   /** 已见帧号（帧广播自动推进；重连补帧的 last_seen_frame）。 */
   lastSeenFrame(): number;
@@ -106,6 +112,10 @@ export interface BattleSession {
   reconnect(): Promise<void>;
   /** 关闭会话（幂等；不再重连）。 */
   close(): Promise<void>;
+  /** 取只读运行统计快照（重连 / 握手（拨号）/ 心跳失败计数；评审 P1-4 可观测）：
+   *  每次调用返回**新对象**（冻结），调用方改它不影响会话内部计数。终态两族分开计：
+   *  endedRejects（对局正常结束，有结算）/ fatalRejects（无结算的终态拒绝）。 */
+  stats(): BattleSessionStats;
 }
 
 /** Settings 会话配置全集（BattleSessionOptions 应用默认值之后）。 */

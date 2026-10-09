@@ -19,18 +19,15 @@ export const EdgeTransport = {
 } as const;
 export type EdgeTransport = (typeof EdgeTransport)[keyof typeof EdgeTransport];
 
-/** 已知传输面集合（未知枚举名忽略，不猜面）。 */
-const KNOWN_TRANSPORTS: readonly string[] = Object.values(EdgeTransport);
+/** 已知传输面集合（未知枚举名忽略，不猜面；UNSPECIFIED 是**协议违背**，另行拒绝）。 */
+const KNOWN_TRANSPORTS: readonly string[] = [EdgeTransport.Ws, EdgeTransport.Kcp, EdgeTransport.Udp];
 
-/** MATCH_STARTED_NOTIFY_OPS 成局推送的 op 形态（两种都接受）：
- *   - `/game.v1.MatchStartedNotify`：protojson 推送按**消息完整名**寻址，生成 stub
- *     （playerServicePushOps.matchStartedNotify）与网关实际下发用的都是这个；
- *   - `/game.v1.PlayerService/MatchStartedNotify`：服务限定名形态（任务书口径），
- *     一并接受，避免两侧命名口径不一致时静默收不到成局通知。 */
-export const MATCH_STARTED_NOTIFY_OPS: readonly string[] = [
-  '/game.v1.MatchStartedNotify',
-  '/game.v1.PlayerService/MatchStartedNotify',
-];
+/** MATCH_STARTED_NOTIFY_OPS 成局推送的 op 形态（**只认消息完整名**）：
+ *  推送按**消息完整名**寻址，生成 stub（playerServicePushOps.matchStartedNotify）与网关
+ *  实际下发用的都是 `/game.v1.MatchStartedNotify`；`/game.v1.PlayerService/MatchStartedNotify`
+ *  是服务/方法名（RPC 调用口径），**不接受**——放宽会让「op 口径不一致」被静默掩盖。
+ *  与 Go SDK 的 direct.PushOpMatchStarted 逐字一致。 */
+export const MATCH_STARTED_NOTIFY_OPS: readonly string[] = ['/game.v1.MatchStartedNotify'];
 
 /** isMatchStartedNotifyOp 判定推送 op 是否为成局通知。 */
 export function isMatchStartedNotifyOp(op: string): boolean {
@@ -130,13 +127,19 @@ function decodeTicket(encoded: string): Uint8Array {
 }
 
 /** parseEndpoints 解析 endpoints[] 为「面 → 地址」表：未知面名/空地址条目忽略
- *（不猜面）；同面重复时后者覆盖。 */
+ *（不猜面）；同面重复时后者覆盖。**UNSPECIFIED 显式拒绝**——proto 注明该值「不得下发」
+ *（面必须显式指定），静默忽略会让「服务端漏配面」伪装成「客户端没这个面」。 */
 function parseEndpoints(raw: unknown): Map<EdgeTransport, string> {
   const out = new Map<EdgeTransport, string>();
   if (!Array.isArray(raw)) return out;
   for (const entry of raw) {
     if (!isPlainObject(entry)) continue;
     const transport = strField(entry, 'transport');
+    if (transport === EdgeTransport.Unspecified) {
+      throw new ProtocolError(
+        `battle: endpoints 下发 ${EdgeTransport.Unspecified}（proto 明示不得下发：传输面必须显式指定）`,
+      );
+    }
     const address = strField(entry, 'address');
     if (address === '' || !KNOWN_TRANSPORTS.includes(transport)) continue;
     out.set(transport as EdgeTransport, address);

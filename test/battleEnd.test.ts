@@ -19,6 +19,7 @@ import { MockBattleServer, jsonBytes, makeBattleFactory } from './battleMock.js'
 import {
   BattleOps,
   BusinessError,
+  LOCAL_SETTLED_KEY,
   isBattleEnded,
   openBattleSession,
   parseDirectPlan,
@@ -83,6 +84,10 @@ describe('BATTLE_ENDED：终态与停发', () => {
     expect(isBattleEnded(err)).toBe(true); // 服务端拒绝原样上抛（可判定）
     expect(s.ended()).toBe(true);
     expect(s.state()).toBe('ended');
+    // 统计两族可区分：本族 = 对局正常结束（**有结算可展示**），不是无结算的终态拒绝。
+    expect(s.stats().endedRejects).toBe(1);
+    expect(s.stats().fatalRejects).toBe(0);
+    expect(s.stats().terminalRejects).toBe(1);
     // 终态即刻停发：再无任何字节写上线（心跳周期 15ms，等 80ms 足够排除泄漏的定时器）。
     const bytesAtEnd = h.sockets[0]!.sent.length;
     await sleep(80);
@@ -140,6 +145,35 @@ describe('BATTLE_ENDED：终态与停发', () => {
     await s.close();
   });
 
+  it('重连恢复入局时收到 BATTLE_ENDED：终态保持 ended、不上报 Failed、不重连', async () => {
+    const h = makeBattleFactory((srv, index) => {
+      srv.onRequest((req, s) => {
+        if (index === 0) {
+          if (req.op === BattleOps.joinBattle) s.replyOK(jsonBytes({ currentFrame: '3' }));
+          else s.replyOK();
+          return;
+        }
+        if (req.op === BattleOps.joinBattle) s.replyStatus('BATTLE_ENDED', BATTLE_ENDED_CODE); // 新一代入局被拒
+        else s.replyOK();
+      });
+    });
+    const failed: unknown[] = [];
+    const s = await open(h.factory, {
+      heartbeatMs: 0,
+      backoffBaseMs: 5,
+      backoffMaxMs: 10,
+      onFailed: (err) => void failed.push(err),
+    });
+    h.servers[0]!.drop(); // 断线 → 自动重连 → 新一代 JoinBattle 撞 BATTLE_ENDED
+    await waitFor(() => s.ended(), 3000);
+    await sleep(60);
+    expect(s.state()).toBe('ended'); // 对局结束是终态：不被降级成 failed
+    expect(s.ended()).toBe(true);
+    expect(failed).toEqual([]); // 对局结束不是失败（上报 Failed 会误导上层重新匹配，与 Go/C# 同口径）
+    expect(h.urls.length).toBe(2); // 不继续重连
+    await s.close();
+  });
+
   it('终态下帧输入/补帧/入局/重连一律报明确错误 BATTLE_ENDED，且零写入', async () => {
     const h = makeBattleFactory(joinOK);
     const s = await open(h.factory);
@@ -158,6 +192,28 @@ describe('BATTLE_ENDED：终态与停发', () => {
       expect(err, `${name} 应抛 BusinessError`).toBeInstanceOf(BusinessError);
     }
     expect(h.sockets[0]!.sent.length).toBe(bytesAtEnd); // 探针一次都没写线
+    await s.close();
+  });
+
+  it('③ 终态时在途请求以终态 Status 本地结算（reason/code/class 对齐，metadata 标本地结算）', async () => {
+    const h = makeBattleFactory((srv) => {
+      srv.onRequest((req, s) => {
+        if (req.op === BattleOps.joinBattle) srv.replyOK(jsonBytes({ currentFrame: '3' })); // 其余不回执
+      });
+    });
+    const s = await open(h.factory, { invokeTimeoutMs: 60_000, heartbeatMs: 0 }); // 超时远大于用例时长
+    const first = s.sendFrameInput({ input: { frameId: '1' } }).catch((e: unknown) => e);
+    const second = s.sendFrameInput({ input: { frameId: '2' } }).catch((e: unknown) => e);
+    h.servers[0]!.notify(BATTLE_END, jsonBytes({ battleId: 'b-9', winnerPlayerId: 'p-1' }));
+    for (const err of await Promise.all([first, second])) {
+      expect(err).toBeInstanceOf(BusinessError); // 不报成网络错误、不等超时
+      expect(isBattleEnded(err)).toBe(true);
+      const be = err as BusinessError;
+      expect(be.code).toBe(BATTLE_ENDED_CODE);
+      expect(be.reason).toBe('BATTLE_ENDED');
+      expect(be.errorClass).toBe(1); // class=business（与生成物 ErrBattleEnded 同分类）
+      expect(be.metadata?.[LOCAL_SETTLED_KEY]).toBe('true'); // 本地结算标记（三 SDK 统一键名）
+    }
     await s.close();
   });
 });
