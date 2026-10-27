@@ -11,12 +11,12 @@
 import type { PendingOutcome } from '../client/channelTypes.js';
 import { ProtocolError } from '../client/errors.js';
 import type { ChannelTransport } from '../client/transport.js';
-import { MsgType, type Header } from '../frame/constants.js';
+import { MsgType, VERSION, type Header } from '../frame/constants.js';
 import { parseRequestBody } from '../frame/body.js';
 import { decodeReply } from '../frame/reply.js';
 import type { Status } from '../frame/status.js';
 import type { BattleOpSet } from './ops.js';
-import { frameIdOfProtojson } from './wire.js';
+import { frameIdOfProtojson, isSupportedPayloadVersion } from './wire.js';
 
 /** InboundHooks 收帧面与会话的接缝（会话注入；本模块不持有会话状态）。 */
 export interface InboundHooks {
@@ -42,8 +42,10 @@ export interface InboundHooks {
   onBattleEnd?: ((payload: Uint8Array, version: number) => void) | undefined;
   /** 任意战斗域推送回调（op 原样透传）。 */
   onPush?: ((op: string, payload: Uint8Array, version: number) => void) | undefined;
-  /** 帧号提取钩子（缺省解 ver=1 protojson 的 frame.frameId）。 */
-  frameNumberOf?: ((payload: Uint8Array, version: number) => number) | undefined;
+  /** 帧号提取钩子：**ver=1 恒走内建**（protojson 的 frame.frameId，注入也不接管）；
+   *  ver≠1（如 ver=2 二进制）非自描述，只认本钩子；返回 null 表示本帧取不到帧号
+   *  （不推进补帧基准、不报错——与 Go 的 FrameNumberFunc 同口径）。 */
+  frameNumberOf?: ((payload: Uint8Array, version: number) => number | null) | undefined;
 }
 
 export class BattleInbound {
@@ -84,8 +86,13 @@ export class BattleInbound {
     }
   }
 
-  /** onResponse 校验响应版本并结算 in-flight；包络非法返回协议致命错误。 */
+  /** onResponse 校验响应版本并结算 in-flight；包络非法返回协议致命错误。
+   *  版本校验两道（与 Go 的 dispatchResponse 同序）：先白名单 {1,2}（未知版本 = 对端或协议
+   *  缺陷，明确报错、不猜编码），再与会话载荷编码比对（白名单内的失配同样是协议级失败）。 */
   private onResponse(hdr: Header, body: Uint8Array): ProtocolError | null {
+    if (!isSupportedPayloadVersion(hdr.version)) {
+      return new ProtocolError(`响应帧版本 ${hdr.version} 不在载荷编码白名单 {1,2}`);
+    }
     if (hdr.version !== this.hooks.version) {
       return new ProtocolError(`响应帧 version ${hdr.version} 与载荷编码 ${this.hooks.version} 不一致`);
     }
@@ -134,12 +141,21 @@ export class BattleInbound {
     }
   }
 
-  /** extractFrameId 提取帧广播的帧号：默认只解 ver=1（protojson）的 frame.frameId；
-   *  ver=2 二进制非自描述，未提供钩子时返回 -1（不猜编码，仅不推进补帧进度）。 */
+  /** extractFrameId 提取帧广播的帧号：**ver=1 恒走内建**（protojson 的 frame.frameId），
+   *  注入钩子也不接管——调试路径的可读格式语义不被自定义提取器改变（与 Go 同口径）；
+   *  其余版本（ver=2 二进制）非自描述，只认调用方注入的钩子，未注入即取不到（返回 -1 =
+   *  不推进补帧基准，也不报错）。 */
   private extractFrameId(payload: Uint8Array, version: number): number {
+    if (version === VERSION) return frameIdOfProtojson(payload);
     const custom = this.hooks.frameNumberOf;
-    if (custom !== undefined) return custom(payload, version);
-    if (version !== 1) return -1;
-    return frameIdOfProtojson(payload);
+    if (custom === undefined) return -1;
+    return normalizeFrameNumber(custom(payload, version));
   }
+}
+
+/** normalizeFrameNumber 归一钩子返回值：只有「非负整数」才算帧号；null / undefined /
+ *  负数 / 小数一律视为取不到（归 -1，由 noteFrame 的「只前进」规则自然忽略）。
+ *  取不到帧号**不是错误**：二进制载荷非自描述，宁可不推进补帧基准，也不能猜编码。 */
+function normalizeFrameNumber(v: number | null | undefined): number {
+  return typeof v === 'number' && Number.isInteger(v) && v >= 0 ? v : -1;
 }

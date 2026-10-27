@@ -5,8 +5,16 @@
 //   - 字面量对象判定（请求体补 battleId 时区分生成 DTO 实例）。
 import { BusinessError, NetworkError, ProtocolError } from '../client/errors.js';
 import { ProtocolError as FrameProtocolError } from '../frame/protocolError.js';
+import { VERSION, VERSION_2 } from '../frame/constants.js';
 import { decodeUtf8 } from '../frame/utf8.js';
 import { edgeRejectedError } from './errors.js';
+
+/** isSupportedPayloadVersion 判定载荷编码版本是否在白名单 {1,2} 内：ver=1（protojson，
+ *  调试开关）与 ver=2（protobuf 二进制）放行；其余版本未知——明确报错，绝不「猜编码再解码」。
+ *  与 Go 的 supportedVersion 同口径（帧层另有生成物的白名单校验，两层各守一段）。 */
+export function isSupportedPayloadVersion(version: number): boolean {
+  return version === VERSION || version === VERSION_2;
+}
 
 /** ConnectPhase 一次建连尝试的阶段（升级 vs 升级后的入局/补帧恢复）。 */
 export type ConnectPhase = 'dial' | 'restore';
@@ -56,10 +64,12 @@ export function safeCall(fn: (() => void) | undefined): void {
   }
 }
 
-/** classifyExit 读循环退出错误归类：协议非法原样（终止不重连），其余归网络错误。 */
+/** classifyExit 读循环退出错误归类：协议非法原样（终止不重连），其余归网络错误。
+ *  帧层错误（如帧头版本不在白名单）**保留原因文本**——只报「帧协议非法」会把
+ *  「ver=3 未知版本」这类可判定原因吞掉，排障时无从下手。 */
 export function classifyExit(err: unknown): NetworkError | ProtocolError {
   if (err instanceof ProtocolError) return err;
-  if (err instanceof FrameProtocolError) return new ProtocolError('战斗直连帧协议非法', err);
+  if (err instanceof FrameProtocolError) return new ProtocolError(`战斗直连帧协议非法：${err.message}`, err);
   if (err instanceof NetworkError) return err;
   return new NetworkError(err instanceof Error ? err.message : String(err));
 }

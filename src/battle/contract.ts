@@ -64,22 +64,26 @@ export interface BattleSessionOptions {
   drainMs?: number;
   /** 战斗 op / 推送 op 名覆盖（默认 battle.v1 契约，见 ops.ts）。 */
   ops?: Partial<BattleOpSet>;
-  /** 帧广播回调（原始载荷 + 帧头载荷编码版本；ver=2 需生成 DTO 解码）。 */
+  /** 帧广播回调（原始载荷 + 帧头载荷编码版本）：**ver=2 需自行解码**——载荷是 protobuf
+   *  二进制，由游戏侧生成包按 `version` 解码，SDK 只交字节与版本、不预解。 */
   onFrame?: (payload: Uint8Array, version: number) => void;
   /** 战斗结束回调（原始载荷 + 版本）。**同一局只触发一次**：服务端结算关闭前的有界重投
    *  （EndRetries=2）与重连补投（每玩家最多 5 次）都会让同一份通知重复到达，重复副本不再
    *  回调（**载荷逐字一致**；若出现不一致副本，以先到者为准——结算不可改判）。重复副本仍会
    *  经 onPush 透传，需要逐份留档/上报的调用方请在那条通道上做。 */
   onBattleEnd?: (payload: Uint8Array, version: number) => void;
-  /** 任意战斗域推送回调（op 原样透传；帧广播/结束也会走这里）。 */
+  /** 任意战斗域推送回调（op 原样透传；帧广播/结束也会走这里）。payload 与 version 同样
+   *  **原样透传**：ver=2 的二进制需调用方自行解码。 */
   onPush?: (op: string, payload: Uint8Array, version: number) => void;
   /** 重连成功回调（重新 JoinBattle + SyncFrames 补帧之后）。 */
   onReconnected?: () => void | Promise<void>;
   /** 会话失败回调（自动重连窗口用尽 / 协议致命）。 */
   onFailed?: (err: unknown) => void;
-  /** 帧号提取（重连时 SyncFrames(last_seen_frame) 用）：默认从 ver=1（protojson）的
-   *  `frame.frameId` 提取；ver=2 二进制非自描述，需调用方提供本钩子。 */
-  frameNumberOf?: (payload: Uint8Array, version: number) => number;
+  /** 帧号提取钩子（重连时 SyncFrames(last_seen_frame) 用）：**ver=1 恒走内建**（protojson
+   *  的 `frame.frameId`，注入也不接管——ver=1 是调试开关，可读格式语义不变）；**ver≠1**
+   *  （如 ver=2 二进制）非自描述，才调用本钩子。返回帧号；**取不到返回 null**——不推进
+   *  补帧基准、也不报错（与 Go 的 FrameNumberFunc 同口径）。未注入时 ver=2 一律不推进。 */
+  frameNumberOf?: (payload: Uint8Array, version: number) => number | null;
 }
 
 /** BattleSession 一条票据绑定的战斗直连会话（战斗 op 全部走直连，不再经网关）。 */

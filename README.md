@@ -140,6 +140,12 @@ socket.on('data', (chunk: Uint8Array) => {
   同一张票仍能跟到新属主。
 - **零 protobuf 运行时依赖**：推送与回执按帧头 `version` 分派（1 = protojson、2 = 二进制）；
   直连路径不需要 DTO 也能跑通（需要结构化字段时再用生成 DTO）。
+- **版本透传与放行**：帧广播 / 结束 / 任意推送回调一律拿到 `(payload, version)`——SDK 只交
+  **字节与版本**，ver=2 的解码由游戏侧生成包负责。补帧基准的帧号：ver=1 **恒走内建**
+  （`frame.frameId`，注入钩子也不接管），ver≠1 才走 `frameNumberOf` 钩子（返回帧号，取不到
+  返回 `null`）；**未注入时 ver=2 不推进也不报错**（二进制非自描述，不猜编码）。出站版本由
+  `serializer` 推导（缺省 ver=1），响应帧版本只接受白名单 `{1,2}` 且必须与会话一致，
+  未知版本是明确的协议级错误。
 - **保活**：`heartbeatMs`（缺省 2000ms）周期发 `Ping`（Tell，无回执）；心跳失败只上报，
   绝不终止会话。
 
@@ -154,7 +160,9 @@ import {
 client.on('/game.v1.MatchStartedNotify', (_op, payload) => {
   void openBattleSession(parseDirectPlan(payload), {
     heartbeatMs: 2000,                                   // 保活（显式 0 关闭）
-    onFrame: (payload, version) => { /* 帧广播（按 version 解码） */ },
+    onFrame: (payload, version) => { /* 帧广播：1 为 protojson、2 为二进制，按版本自行解码 */ },
+    // 帧号钩子：ver=1 恒走内建（注入也不接管）；ver≠1 才调用，取不到返回 null（不推进、不报错）
+    frameNumberOf: (payload, _version) => /* 用游戏侧生成包取帧号 */ null,
     onBattleEnd: (payload) => { /* 结算结果：同一局恰一次（重复投递已幂等） */ },
     onFailed: (err) => {
       // 不可重试终止（含终态族业务拒绝：对局不存在/已满/目标不一致）→ 回匹配链路
