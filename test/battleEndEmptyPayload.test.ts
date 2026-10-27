@@ -13,8 +13,8 @@
 //      结算永久丢失，且无法从任何回调取回。
 //   3. 三 SDK 必须一致：Go/C# 都已按「只认非空载荷」收口，TS 不能漂在自己的旧口径上。
 //
-// 非空载荷**照旧**：首投进终态并回调恰一次，补投（含重投/重连补投）不重放回调；
-// TS 既有的「非空副本仍经 onPush 透传」契约不变（Go/C# 无此通道，见 CHANGELOG 说明）。
+// 非空载荷：首投进终态、回调恰一次、**从统一出口出去一次**；补投副本（逐个一致或不一致）
+// 只比对不改判，**不从任何出口出去**（Go/C# 同口径——三语言在统一出口上只看得见首投）。
 import { describe, expect, it } from 'vitest';
 import { waitFor } from './helpers.js';
 import { MockBattleServer, jsonBytes, makeBattleFactory } from './battleMock.js';

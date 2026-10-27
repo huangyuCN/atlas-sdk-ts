@@ -2,8 +2,9 @@
 //
 // 会话把「查表结算 / 终态收口 / 心跳记账 / 结束通知收口」以钩子注入，本模块只管帧语义：
 //   - Response：版本校验 → 包络解码 →（心跳回执记账｜终态收口）→ 按 seq 结算；
-//   - Notify：op 分发（帧广播推进补帧基准 + onFrame；结束通知首份为准 + onBattleEnd，
-//     空载荷直接丢弃；其余 op 透传 onPush）——坏帧与回调异常都不影响读循环；
+//   - Notify：op 分发（帧广播推进补帧基准 + onFrame；结束通知**只有首投**从统一出口
+//     出去一次 + onBattleEnd，空载荷与补投副本直接丢弃；其余 op 透传 onPush）——坏帧与
+//     回调异常都不影响读循环；
 //   - 其余帧类型：协议致命（交会话终止本代连接）。
 //
 // 关键顺序（评审 R3-P1）：**终态判定必须在结算之前**——心跳回执没有 pending，若先走
@@ -126,9 +127,10 @@ export class BattleInbound {
 
   /** dispatch 按 op 分发推送（回调异常隔离：不影响读循环）。
    *  帧号先于 onFrame 推进（回调抛异常也不丢补帧进度）；结束通知按「首份为准」收口
-   *  （服务端有界重投 + 重连补投都会重复到达，业务回调必须恰一次），其中**空载荷一律丢弃**：
-   *  不进终态、不回调、也不经统一出口分发（跨 SDK 统一契约——Go 的 noteEndNotify 与 C# 的
-   *  NoteEndNotify 都以载荷长度为零提前返回，三语言必须同口径）。重复副本仍经 onPush 透传。 */
+   *  （服务端有界重投 + 重连补投都会重复到达，业务回调必须恰一次）：**只有首投从统一出口
+   *  出去一次**，空载荷与补投副本一律丢弃——不进终态、不回调、也不经 onPush 分发。
+   *  这是跨 SDK 统一契约（Go 的 dispatchNotify/noteEndNotify、C# 的 OnBattleEnd/
+   *  NoteEndNotify 都对「空载荷 + 补投」提前 return，三语言必须同口径）。 */
   private dispatch(op: string, payload: Uint8Array, version: number): void {
     try {
       if (op === OP_FRAME_BROADCAST) {
@@ -136,8 +138,8 @@ export class BattleInbound {
         this.hooks.onFrame?.(payload, version);
       } else if (op === OP_BATTLE_END_NOTIFY) {
         const disposition = this.hooks.absorbEnd(payload);
-        if (disposition === 'empty') return; // 空载荷：连统一出口也不可见（"不分发"）
-        if (disposition === 'first') this.hooks.onBattleEnd?.(payload, version);
+        if (disposition !== 'first') return; // 空载荷 / 补投：连统一出口也不可见（"不分发"）
+        this.hooks.onBattleEnd?.(payload, version);
       }
       this.hooks.onPush?.(op, payload, version);
     } catch {

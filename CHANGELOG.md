@@ -51,8 +51,14 @@ lockstep），battle / game / matcher 的 DTO 与手写包装改由游戏自己�
   一切上发被本地以 `BATTLE_ENDED` 拒绝），且真结算到达时已被当作补投丢弃。
   口径与 Go（`direct/ended.go` 的 `noteEndNotify`：`len(payload) == 0` 提前返回）与 C#
   （`BattleSession.Ended.cs` 的 `NoteEndNotify`：`payload.Length == 0` 提前返回）逐条一致。
-  **非空载荷照旧**：首投回调恰一次、补投不重放回调（TS 既有的「非空补投副本仍经 `onPush`
-  透传」契约不变）。
+  **非空载荷照旧**：首投回调恰一次、补投不重放回调（补投在统一出口上的口径见下一条）。
+- **行为变更：结束通知的补投副本不再经统一出口分发，与 Go/C# 一致**。结束通知只有在
+  **首投**时从 `onPush` 出去一次；服务端的有界重投与重连补投（`EndRetries=2` /
+  `MaxEndReplays=5`，逐字一致或不一致副本）一律**不从任何出口分发**——不进终态、不重放
+  `onBattleEnd`、不经 `onPush`（`dispatch` 对非「首投」提前返回，与 Go 的
+  `dispatchNotify`、C# 的 `OnBattleEnd` 同形）。这废止 0.7.0 条目里「重复副本仍经
+  `onPush` 透传」的旧口径：三 SDK 在统一出口上**只看得见首投这一份**（结算以首投为准，
+  补投不改判）。需要「收到过几份副本」这类投递观测的调用方，请自建计数（SDK 不再透传副本）。
 
 ### 文档
 

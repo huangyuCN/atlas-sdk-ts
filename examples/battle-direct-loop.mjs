@@ -191,7 +191,7 @@ async function openDirect(player, heartbeatMs) {
     },
     onPush: (op) => {
       stats.pushes.push({ t: Date.now(), op });
-      if (op === OP_END) stats.endPushes += 1; // 线上收到的结束通知**份数**（含重复投递）
+      if (op === OP_END) stats.endPushes += 1; // 统一出口可见的结束通知份数（SDK 只放首投；补投不可见）
     },
     onFailed: (err) => {
       stats.failedAt = Date.now();
@@ -338,8 +338,8 @@ async function verifyEndQuiescence(da, db, windowMs = 2_500) {
     da.session.ended() &&
     da.session.state() === 'ended';
   log(
-    `[收口] 结束通知线上份数：A=${da.stats.endPushes} 份/B=${db.stats.endPushes} 份 → 业务回调 A=${da.stats.endCount} 次/B=${db.stats.endCount} 次` +
-      `${da.stats.endPushes > 1 ? '（重复投递已被幂等去重）' : '（本次未观察到重复投递）'}`,
+    `[收口] 结束通知统一出口份数：A=${da.stats.endPushes} 份/B=${db.stats.endPushes} 份 → 业务回调 A=${da.stats.endCount} 次/B=${db.stats.endCount} 次` +
+      '（SDK 只放首投，补投在客户端不可见）',
   );
   log(
     `[收口] 对局结束后 ${(windowMs / 1000).toFixed(1)}s 内：A 新增上发 ${late.length} 帧` +

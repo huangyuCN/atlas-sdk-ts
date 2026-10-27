@@ -8,7 +8,7 @@
 //      （ReplayEnd）——同一份通知会重复到达，业务回调必须**恰一次**（否则重复结算展示、
 //      重复发奖）。同一局的载荷由服务端留档（EndedBook）唯一确定、逐字一致；
 //      若出现不一致副本，以**先到者为准**（结算不可改判）：既不回第二遍，也不改判，
-//      该副本仍会经 onPush 透传，可观测性不丢。
+//      该副本不从任何出口出去（补投在统一出口不可见，与 Go/C# 同口径）。
 //   2. **终态即时停发**：对局结束后服务端对任何迟到帧 op（含心跳 Ping）一律回
 //      BATTLE_ENDED——客户端若不停，就是对着已结束的对局持续刷帧。
 //   3. **有界收尾窗口**：结算结果与最后一帧可能仍在途，停发之后要留一段窗口把连接上
@@ -28,7 +28,8 @@ export interface EndingHooks {
 }
 
 /** EndNotifyDisposition 一条结束通知的处置：'empty' = 空载荷不算结束信号（不占用首投
- *  名额）、'first' = 首投（进终态并回调一次）、'replay' = 重复副本（不改判、不重放回调）。 */
+ *  名额）、'first' = 首投（进终态并回调一次）、'replay' = 重复副本（不改判、不重放回调、
+ *  也不从任何出口出去——收帧面对非 'first' 一律提前返回）。 */
 export type EndNotifyDisposition = 'empty' | 'first' | 'replay';
 
 export class BattleEnding {
@@ -49,13 +50,14 @@ export class BattleEnding {
   }
 
   /** absorb 吸收一条结束通知：'first' = **首份结算**（调用方回调一次业务）、'replay' =
-   *  重复副本（不改判、不回第二遍）、'empty' = 空载荷（**不构成结束信号**）。
+   *  重复副本（不改判、不回第二遍、也不分发）、'empty' = 空载荷（**不构成结束信号**）。
    *
-   *  空载荷判据是**跨 SDK 统一契约**（改这里之前先看另外两份实现，三语言必须同口径）：
+   *  空载荷与补投判据是**跨 SDK 统一契约**（改这里之前先看另外两份实现，三语言必须同口径）：
    *  Go `direct/ended.go` 的 noteEndNotify 以 `len(payload) == 0` 提前返回、C#
    *  `BattleSession.Ended.cs` 的 NoteEndNotify 以 `payload.Length == 0` 提前返回——都
-   *  **不进终态、不回调、不分发**。空载荷还必须**不占用首投名额**（不置 sealed、不启动
-   *  收尾窗口）：否则随后到达的真正结算会被当补投副本丢弃，结算永久丢失且无处取回。
+   *  **不进终态、不回调、不分发**（补投同理：只有首投可见）。空载荷还必须**不占用首投
+   *  名额**（不置 sealed、不启动收尾窗口）：否则随后到达的真正结算会被当补投副本丢弃，
+   *  结算永久丢失且无处取回。
    */
   absorb(payload: Uint8Array): EndNotifyDisposition {
     if (payload.length === 0) return 'empty';

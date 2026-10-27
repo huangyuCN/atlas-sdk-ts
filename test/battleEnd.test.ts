@@ -242,10 +242,34 @@ describe('结算通知补投的幂等', () => {
     // 结算前的有界重投（EndRetries=2）+ 重连补投（MaxEndReplays=5）合计最多 5 份同载荷副本。
     const first = { battleId: 'b-9', winnerPlayerId: 'p-1' };
     for (let i = 0; i < 5; i++) srv.notify(BATTLE_END, jsonBytes(first));
-    await waitFor(() => pushed.length === 5, 2000);
+    await waitFor(() => end.length === 1, 2000);
+    await sleep(40); // 留出窗口：若补投仍透传，下面会数出 5 份
     expect(end.length).toBe(1); // 幂等：只回调一次
     expect(JSON.parse(end[0]!)).toEqual(first);
-    expect(pushed.length).toBe(5); // 重复副本仍经 onPush 透传（可观测、可上报）
+    expect(pushed.length).toBe(1); // 补投副本不进统一出口（与 Go/C# 一致：只有首投可见）
+    await s.close();
+  });
+
+  it('补投副本（逐字一致 / 不一致）都不经统一出口：只有首投从 onPush 出去一次', async () => {
+    const h = makeBattleFactory(joinOK);
+    const ends: string[] = [];
+    const pushed: string[] = [];
+    const s = await open(h.factory, {
+      onBattleEnd: (payload) => void ends.push(new TextDecoder().decode(payload)),
+      onPush: (op, payload) => {
+        if (op === BATTLE_END) pushed.push(new TextDecoder().decode(payload));
+      },
+    });
+    const srv = h.servers[0]!;
+    const first = { battleId: 'b-9', winnerPlayerId: 'p-1' };
+    srv.notify(BATTLE_END, jsonBytes(first));
+    await waitFor(() => ends.length === 1, 2000);
+    srv.notify(BATTLE_END, jsonBytes(first)); // 逐字一致的补投
+    srv.notify(BATTLE_END, jsonBytes({ battleId: 'b-9', winnerPlayerId: 'p-9' })); // 不一致副本
+    await sleep(40);
+    expect(ends.length).toBe(1); // 结算仍恰一次、以首投为准（补投不改判）
+    expect(pushed.length).toBe(1); // 两类补投都不进统一出口（Go/C# 对补投同样提前 return）
+    expect(JSON.parse(pushed[0]!)).toEqual(first);
     await s.close();
   });
 
