@@ -6,7 +6,9 @@
 // 错误四分类与 backoffDelay/sleepInterruptible（退避）。收帧面见 src/battle/inbound.ts，
 // 待结算表见 pending.ts，运行统计见 stats.ts。
 //
-// 错误分类的判定入口见 src/battle/errors.ts（接入层拒连 = 不可重试的 NetworkError、
+// 游戏域消息不在这里：op 与载荷由调用方给出（probe / replay / invoke），本文件只做连接
+// 生命周期、帧编解码与错误分类。错误分类的判定入口见 src/battle/errors.ts（接入层拒连 =
+// 不可重试的 NetworkError、
 // 票类拒绝与「对局已结束」= BusinessError、帧/包络非法 = ProtocolError）。本文件额外维护
 // **两类终态**，都不可逆、都不再写线：
 //   1. 对局结束（ending.ts 收口）：停发一切上发，只在收尾窗口内继续收结果；
@@ -45,12 +47,10 @@ import {
   classifyFailure,
   classifyWriteError,
   safeCall,
-  syncRequest,
-  withBattleId,
   type ConnectPhase,
 } from './wire.js';
 
-export type { BattleSession, BattleSessionOptions, BattleSessionState } from './contract.js';
+export type { BattleSession, BattleSessionOptions, BattleSessionState, ProbeSpec, ReplayStep } from './contract.js';
 export type { BattleSessionStats } from './stats.js';
 
 /** HEARTBEAT_TRACK 在途心跳记账上限（拍）：心跳是 Tell（无 pending），但回执可能带业务
@@ -77,7 +77,6 @@ class DirectBattleSession implements BattleSession {
   private current: BattleSessionState = 'connecting';
   private seq = 0;
   private connecting = false;
-  private joined = false;
   private restoring = false;
   private closing = false;
   private reconnectTask: Promise<void> | null = null;
@@ -137,7 +136,6 @@ class DirectBattleSession implements BattleSession {
     return new BattleInbound({
       version: this.ver,
       maxBodySize: this.settings.maxBodySize,
-      ops: this.settings.ops,
       settle: (seq, outcome) => this.pending.settle(seq, outcome),
       takeHeartbeat: (seq) => this.heartbeats.delete(seq),
       onHeartbeatRejected: (status) => this.terminal.onHeartbeatRejected(status),
@@ -171,24 +169,14 @@ class DirectBattleSession implements BattleSession {
     return this.counters.snapshot();
   }
 
-  async joinBattle(req?: unknown, ...opts: InvokeOption[]): Promise<unknown> {
+  /** invoke 发一条业务 op 并等回执：op 与载荷原样交给线上（不补字段、不改写），
+   *  终态守卫与错误归一与内部恢复路径完全同形（见 call）。 */
+  async invoke(op: string, req?: unknown, ...opts: InvokeOption[]): Promise<unknown> {
     this.requireReady();
-    const reply = await this.call(this.settings.ops.joinBattle, withBattleId(this.battleId, req), opts);
-    this.joined = true;
-    return reply;
+    return this.call(op, req, opts);
   }
 
-  async sendFrameInput(req?: unknown, ...opts: InvokeOption[]): Promise<unknown> {
-    this.requireReady();
-    return this.call(this.settings.ops.sendFrameInput, withBattleId(this.battleId, req), opts);
-  }
-
-  async syncFrames(lastSeenFrame: number = this.lastSeenFrame(), ...opts: InvokeOption[]): Promise<unknown> {
-    this.requireReady();
-    return this.call(this.settings.ops.syncFrames, syncRequest(this.battleId, lastSeenFrame), opts);
-  }
-
-  /** reconnect 重新升级并恢复入局状态：已连接时幂等；并发调用共享同一轮尝试。 */
+  /** reconnect 重新升级并按 `replay` 配置重放：已连接时幂等；并发调用共享同一轮尝试。 */
   reconnect(): Promise<void> {
     const fatal = this.terminal.error();
     if (fatal !== null) return Promise.reject(fatal); // 终态：会话无用，重连无意义
@@ -237,9 +225,9 @@ class DirectBattleSession implements BattleSession {
     if (tr !== null) await tr.close().catch(() => {});
   }
 
-  /** open 首次建连（autoJoin 时在本次尝试内完成 JoinBattle）。 */
+  /** open 首次建连：只建立连接，不内建任何业务 op（入局由调用方在 open 后自行 invoke，
+   *  与 Go/C# 同口径——「是否已入局」不再由 SDK 推断）。 */
   async open(): Promise<void> {
-    this.joined = this.settings.autoJoin;
     this.setState('connecting');
     await this.connectOnce(false);
   }
@@ -272,7 +260,7 @@ class DirectBattleSession implements BattleSession {
         await this.restore(isReconnect);
         if (this.transport !== tr) throw new NetworkError('战斗直连在建立后立即断开');
         this.setState('connected');
-        this.heartbeat.start(); // 保活心跳随本代连接启动（换代/关闭即停）
+        this.startHeartbeat(); // 保活心跳随本代连接启动（未配置探针则不启动；换代/关闭即停）
         if (isReconnect) {
           this.counters.reconnects += 1;
           await this.settings.onReconnected?.();
@@ -322,13 +310,17 @@ class DirectBattleSession implements BattleSession {
     return true;
   }
 
-  /** restore 恢复入局状态：曾入局则重新 JoinBattle；重连额外用 SyncFrames 补帧。 */
+  /** restore 重连成功后按配置重放：载荷由步骤用当前 last_seen_frame 生成（通常是入局 +
+   *  按断点补帧）。未配置重放则什么都不发——「是否已入局」由调用方是否配置重放表达。 */
   private async restore(isReconnect: boolean): Promise<void> {
-    if (!this.joined) return;
+    const steps = this.settings.replay;
+    if (!isReconnect || steps.length === 0) return;
     this.restoring = true;
     try {
-      await this.call(this.settings.ops.joinBattle, { battleId: this.battleId }, []);
-      if (isReconnect) await this.call(this.settings.ops.syncFrames, syncRequest(this.battleId, this.lastSeenFrame()), []);
+      for (const step of steps) {
+        const req = step.req === undefined ? undefined : step.req(this.lastSeenFrame());
+        await this.call(step.op, req, []);
+      }
     } finally {
       this.restoring = false;
     }
@@ -392,15 +384,26 @@ class DirectBattleSession implements BattleSession {
     return this.unwrap(await outcome);
   }
 
+  /** startHeartbeat 启动本代连接的保活循环：未配置探针即不启动（一个字节都不发，
+   *  不裸发现空载荷探针——那会被服务端按目标一致性判为拒绝）。 */
+  private startHeartbeat(): void {
+    if (this.settings.probe === undefined) return;
+    this.heartbeat.start();
+  }
+
   /** sendHeartbeat 一拍保活：Tell 语义——带会话槽票、不带幂等键、**不登记 pending**
-   *（回执若到由在途心跳账认领：成功丢弃、业务拒绝记账）；未就绪/恢复入局中/终态跳过本轮，
-   *  避免与建连、补帧抢跑。发送失败由 BattleHeartbeat 归口到 onHeartbeatError。 */
+   *（回执若到由在途心跳账认领：成功丢弃、业务拒绝记账）；未就绪/恢复重放中/终态跳过本轮，
+   *  避免与建连、补帧抢跑。探针 op 与载荷由 `probe` 给出（游戏侧用协议包构造），
+   *  发送失败由 BattleHeartbeat 归口到 onHeartbeatError。 */
   private async sendHeartbeat(): Promise<void> {
     const tr = this.transport;
-    if (tr === null || this.closing || this.restoring || this.terminal.isFatal()) return;
-    if (this.ending.isEnded() || this.current !== 'connected') return; // 终态停发（含 Ping）
-    const payload = this.settings.serializer.marshal(withBattleId(this.battleId, undefined));
-    const body = buildRequestBodyFull(this.settings.ops.ping, this.slot, '', payload);
+    const probe = this.settings.probe;
+    if (tr === null || probe === undefined || this.closing || this.restoring || this.terminal.isFatal()) return;
+    if (this.ending.isEnded() || this.current !== 'connected') return; // 终态停发（含探针）
+    const payload = probe.req === null || probe.req === undefined
+      ? new Uint8Array(0)
+      : this.settings.serializer.marshal(probe.req);
+    const body = buildRequestBodyFull(probe.op, this.slot, '', payload);
     const seq = ++this.seq;
     this.trackHeartbeat(seq);
     const header: Header = {
@@ -477,8 +480,8 @@ class DirectBattleSession implements BattleSession {
   }
 }
 
-/** openBattleSession 打开一条战斗直连会话：升级带票 → （默认）JoinBattle；
- *  失败时关闭半开连接并把可判定错误上抛（票过期/接入层拒连由上层决定回退）。 */
+/** openBattleSession 打开一条战斗直连会话：升级带票即返回（不内建入局）；
+ *  失败时关闭半开连接并把可判定错误上抛（接入层拒连由上层决定回退）。 */
 export async function openBattleSession(
   plan: DirectPlan,
   opts: BattleSessionOptions = {},

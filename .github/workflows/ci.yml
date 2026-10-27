@@ -36,9 +36,11 @@ jobs:
           ref: 08933f9ae854f66e196c38d2dead789511153e89
           path: atlas
           token: ${{ secrets.ATLAS_CI_TOKEN }}
-      # 模板仓 = 会话协议唯一来源（R13）：descriptor set 与三语言会话 stub 由它导出，
+      # 模板仓 = 会话协议（契约消息）唯一来源（R13）：descriptor set 与三语言会话 stub 由它导出，
       # 「重生成无 diff」门禁需要它。目录名必须是 atlas-game-layout——gen-dto.sh 把
       # 「模板仓目录名 + 仓内相对路径」写进生成物文件头，路径变了产物就会 diff。
+      # 游戏域消息（battle/game/matcher）不在这里生成：它们由游戏自己的协议包（模板仓 protocol/）
+      # 独立发布，本仓 package.json 不依赖它（边界守卫见 test/gameDomainGuard.test.ts）。
       - uses: actions/checkout@v4
         with:
           repository: huangyuCN/atlas-game-layout
@@ -58,12 +60,12 @@ jobs:
         run: pnpm check
         env:
           ATLAS_GOLDEN_DIR: ${{ github.workspace }}/atlas/testdata/golden
-      # 重生成无 diff 门禁：帧常量（框架生成物）、会话 stub 快照与冒烟 schema
-      # （模板 descriptor set）都必须与入库产物逐字节一致——上游改了协议而本仓
-      # 忘了重跑 gen-dto.sh，在 CI 直接失败。
+      # 重生成无 diff 门禁：帧常量（框架生成物）、契约消息 stub 快照与冒烟 schema
+      # （模板 descriptor set + lockstep 契约消息）都必须与入库产物逐字节一致——上游改了
+      # 协议而本仓忘了重跑 gen-dto.sh，在 CI 直接失败；游戏域若被重新生成回来同样会红。
       - name: 安装 protoc（descriptor set 与 schema 重生成用）
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-      - name: 重生成无 diff 门禁（帧常量 + 会话 stub + 冒烟 schema）
+      - name: 重生成无 diff 门禁（帧常量 + 契约消息 stub/schema）
         run: |
           bash scripts/gen-dto.sh
           git diff --exit-code

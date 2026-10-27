@@ -1,4 +1,4 @@
-// 战斗直连保活心跳（battle.v1.BattleService/Ping，Tell 无回执）测试：
+// 战斗直连保活心跳（探针 op 与载荷由调用方注入，Tell 无回执）测试：
 //   ① 周期到点发出 Ping（op/载荷/票槽/无幂等键，按线上字节断言）；
 //   ② close() 清定时器——关闭后不再发 Ping（不泄漏）；
 //   ③ 发送失败只回调、不终止会话（状态不降级，随后正常发帧不受影响）；
@@ -8,7 +8,14 @@ import { describe, expect, it } from 'vitest';
 import { waitFor } from './helpers.js';
 import { MockBattleServer, jsonBytes, makeBattleFactory } from './battleMock.js';
 import {
-  BattleOps,
+  STUB_OP_JOIN,
+  STUB_OP_PING,
+  STUB_OP_SYNC,
+  battleDefaults,
+  sendFrameInput,
+  syncFrames,
+} from './battleStub.js';
+import {
   MsgType,
   openBattleSession,
   parseDirectPlan,
@@ -38,14 +45,15 @@ function planOf(address = '10.0.0.9:7100') {
 /** 默认服务端行为：JoinBattle 回成功回执（其余 op 回空成功）。 */
 function joinOK(srv: MockBattleServer): void {
   srv.onRequest((req, s) => {
-    if (req.op === BattleOps.joinBattle) s.replyOK(jsonBytes({ currentFrame: '3' }));
+    if (req.op === STUB_OP_JOIN) s.replyOK(jsonBytes({ currentFrame: '3' }));
     else s.replyOK();
   });
 }
 
-/** 带 mock WS 工厂打开一条直连会话（各用例统一入口）。 */
+/** 带 mock WS 工厂打开一条直连会话（各用例统一入口）：探针由测试侧替身给出
+ *  （生产用游戏协议包构造探针 op 与载荷，SDK 不内建）。 */
 function open(factory: WebSocketFactory, opts: BattleSessionOptions = {}): Promise<BattleSession> {
-  return openBattleSession(planOf(), { wsFactory: factory, ...opts });
+  return openBattleSession(planOf(), { ...battleDefaults('b-9'), wsFactory: factory, ...opts });
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
@@ -55,12 +63,12 @@ function isPingFrame(data: ArrayBuffer | Uint8Array): boolean {
   const bytes = data instanceof ArrayBuffer ? new Uint8Array(data) : data;
   const r = readFrameFrom(bytes, 0);
   if (!r.ok || r.header.type !== MsgType.Request) return false;
-  return parseRequestBodyFull(r.body, r.header.flags ?? 0).operation === BattleOps.ping;
+  return parseRequestBodyFull(r.body, r.header.flags ?? 0).operation === STUB_OP_PING;
 }
 
 /** pingsOf 取该服务端收到的 Ping 帧（复用 battleMock 的收帧记录）。 */
 function pingsOf(srv: MockBattleServer) {
-  return srv.frames.filter((f) => f.op === BattleOps.ping);
+  return srv.frames.filter((f) => f.op === STUB_OP_PING);
 }
 
 describe('战斗直连保活心跳', () => {
@@ -111,7 +119,7 @@ describe('战斗直连保活心跳', () => {
     expect(s.state()).toBe('connected'); // 未因心跳失败降级/终止
     expect(failures).toEqual([]);
     failing = false;
-    await expect(s.sendFrameInput({ input: { frameId: '1', payload: 'AQ==' } })).resolves.toBeDefined();
+    await expect(sendFrameInput(s, 'b-9', 1, 'AQ==')).resolves.toBeDefined();
     await waitFor(() => pingsOf(h.servers[0]!).length >= 1);
     await s.close();
   });
@@ -144,15 +152,15 @@ describe('战斗直连保活心跳', () => {
   it('与正常发帧互不干扰：心跳期间请求-响应照常结算（回执不误配）', async () => {
     const h = makeBattleFactory((srv) => {
       srv.onRequest((req, s) => {
-        if (req.op === BattleOps.joinBattle) s.replyOK(jsonBytes({ currentFrame: '3' }));
-        else if (req.op === BattleOps.syncFrames) s.replyOK(jsonBytes({ currentFrame: '9' }));
+        if (req.op === STUB_OP_JOIN) s.replyOK(jsonBytes({ currentFrame: '3' }));
+        else if (req.op === STUB_OP_SYNC) s.replyOK(jsonBytes({ currentFrame: '9' }));
         else s.replyOK();
       });
     });
     const s = await open(h.factory, { heartbeatMs: 20 });
     await waitFor(() => pingsOf(h.servers[0]!).length >= 2);
-    await expect(s.syncFrames(8)).resolves.toEqual({ currentFrame: '9' });
-    await expect(s.sendFrameInput({})).resolves.toBeDefined();
+    await expect(syncFrames(s, 'b-9', 8)).resolves.toEqual({ currentFrame: '9' });
+    await expect(s.invoke('/battle.v1.BattleService/SendFrameInput', {})).resolves.toBeDefined();
     await waitFor(() => pingsOf(h.servers[0]!).length >= 4); // 心跳仍在继续
     expect(s.state()).toBe('connected');
     await s.close();

@@ -38,7 +38,7 @@ export function isMatchStartedNotifyOp(op: string): boolean {
 export interface DirectPlan {
   /** 对局 ID（信息字段，可能为空串）。 */
   readonly matchId: string;
-  /** 战斗 ID（JoinBattle/SyncFrames 的客体寻址字段）。 */
+  /** 战斗 ID（入局/补帧请求的客体寻址字段；消息类型属游戏协议包）。 */
   readonly battleId: string;
   /** 本人那张入场票据密文（AEAD 密文；升级 query 与帧会话槽都用它）。 */
   readonly ticket: Uint8Array;

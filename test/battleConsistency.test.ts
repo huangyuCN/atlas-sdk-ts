@@ -13,11 +13,17 @@ import { describe, expect, it } from 'vitest';
 import { waitFor } from './helpers.js';
 import { MockBattleServer, isOpFrame, jsonBytes, makeBattleFactory } from './battleMock.js';
 import {
+  STUB_OP_INPUT,
+  STUB_OP_JOIN,
+  STUB_OP_PING,
+  battleDefaults,
+  sendFrameInput,
+} from './battleStub.js';
+import {
   BATTLE_FULL_CODE,
   BATTLE_FULL_REASON,
   BATTLE_NOT_FOUND_CODE,
   BATTLE_NOT_FOUND_REASON,
-  BattleOps,
   BusinessError,
   FRAME_TARGET_MISMATCH_CODE,
   FRAME_TARGET_MISMATCH_REASON,
@@ -52,14 +58,14 @@ function planOf(address = '10.0.0.9:7100') {
 /** 默认服务端行为：JoinBattle 回成功回执（其余 op 回空成功）。 */
 function joinOK(srv: MockBattleServer): void {
   srv.onRequest((req, s) => {
-    if (req.op === BattleOps.joinBattle) s.replyOK(jsonBytes({ currentFrame: '3' }));
+    if (req.op === STUB_OP_JOIN) s.replyOK(jsonBytes({ currentFrame: '3' }));
     else s.replyOK();
   });
 }
 
-/** 带 mock WS 工厂打开一条直连会话（各用例统一入口）。 */
+/** 带 mock WS 工厂打开一条直连会话（各用例统一入口）：探针/重放/帧号钩子由测试侧替身给出。 */
 function open(factory: WebSocketFactory, opts: BattleSessionOptions = {}): Promise<BattleSession> {
-  return openBattleSession(planOf(), { wsFactory: factory, ...opts });
+  return openBattleSession(planOf(), { ...battleDefaults('b-9'), wsFactory: factory, ...opts });
 }
 
 /** statusOf 构造一份服务端业务拒绝 Status（class 缺省 1 = 业务类，与生成物口径一致）。 */
@@ -74,8 +80,8 @@ function sleep(ms: number): Promise<void> {
 
 /** sendFrames 发两条帧输入并收集结算结果（在途结算用例共用）。 */
 async function twoInFlight(s: BattleSession): Promise<unknown[]> {
-  const first = s.sendFrameInput({ input: { frameId: '1' } }).catch((e: unknown) => e);
-  const second = s.sendFrameInput({ input: { frameId: '2' } }).catch((e: unknown) => e);
+  const first = sendFrameInput(s, 'b-9', 1).catch((e: unknown) => e);
+  const second = sendFrameInput(s, 'b-9', 2).catch((e: unknown) => e);
   return Promise.all([first, second]);
 }
 
@@ -83,8 +89,8 @@ describe('① 终态族：BATTLE_NOT_FOUND / BATTLE_FULL 不可重试、终态�
   it('BATTLE_NOT_FOUND（404/biz 3001）→ 终态 failed + onFailed 上报 + 停发 + 不重连', async () => {
     const h = makeBattleFactory((srv) => {
       srv.onRequest((req, s) => {
-        if (req.op === BattleOps.joinBattle) srv.replyOK(jsonBytes({ currentFrame: '3' }));
-        else if (req.op === BattleOps.sendFrameInput) {
+        if (req.op === STUB_OP_JOIN) srv.replyOK(jsonBytes({ currentFrame: '3' }));
+        else if (req.op === STUB_OP_INPUT) {
           srv.replyStatusOf(statusOf(BATTLE_NOT_FOUND_CODE, BATTLE_NOT_FOUND_REASON));
         } else srv.replyOK();
       });
@@ -96,7 +102,7 @@ describe('① 终态族：BATTLE_NOT_FOUND / BATTLE_FULL 不可重试、终态�
       backoffMaxMs: 10,
       onFailed: (err) => void failed.push(err),
     });
-    const err = await s.sendFrameInput({ input: { frameId: '1' } }).catch((e: unknown) => e);
+    const err = await sendFrameInput(s, 'b-9', 1).catch((e: unknown) => e);
     // 服务端拒绝原样上抛且可判定（判定函数 + 常量与 BATTLE_ENDED 同族）。
     expect(err).toBeInstanceOf(BusinessError);
     expect(isBattleNotFound(err)).toBe(true);
@@ -129,15 +135,15 @@ describe('① 终态族：BATTLE_NOT_FOUND / BATTLE_FULL 不可重试、终态�
   it('BATTLE_FULL（409/biz 3002）→ 同一族终态（判定函数/常量口径一致）', async () => {
     const h = makeBattleFactory((srv) => {
       srv.onRequest((req, s) => {
-        if (req.op === BattleOps.joinBattle) srv.replyOK(jsonBytes({ currentFrame: '3' }));
-        else if (req.op === BattleOps.sendFrameInput) {
+        if (req.op === STUB_OP_JOIN) srv.replyOK(jsonBytes({ currentFrame: '3' }));
+        else if (req.op === STUB_OP_INPUT) {
           srv.replyStatusOf(statusOf(BATTLE_FULL_CODE, BATTLE_FULL_REASON));
         } else srv.replyOK();
       });
     });
     const failed: unknown[] = [];
     const s = await open(h.factory, { heartbeatMs: 0, onFailed: (err) => void failed.push(err) });
-    const err = await s.sendFrameInput({}).catch((e: unknown) => e);
+    const err = await sendFrameInput(s, 'b-9', 1).catch((e: unknown) => e);
     expect(isBattleFull(err)).toBe(true);
     expect(isBattleTerminalReject(err)).toBe(true);
     expect(isBattleEnded(err)).toBe(false);
@@ -154,15 +160,15 @@ describe('① 终态族：BATTLE_NOT_FOUND / BATTLE_FULL 不可重试、终态�
   it('FRAME_TARGET_MISMATCH（403）：票面对局与正文目标不一致 → 同族终态（不可重试 + 上报 + 停发）', async () => {
     const h = makeBattleFactory((srv) => {
       srv.onRequest((req, s) => {
-        if (req.op === BattleOps.joinBattle) srv.replyOK(jsonBytes({ currentFrame: '3' }));
-        else if (req.op === BattleOps.sendFrameInput) {
+        if (req.op === STUB_OP_JOIN) srv.replyOK(jsonBytes({ currentFrame: '3' }));
+        else if (req.op === STUB_OP_INPUT) {
           srv.replyStatusOf(statusOf(FRAME_TARGET_MISMATCH_CODE, FRAME_TARGET_MISMATCH_REASON));
         } else srv.replyOK();
       });
     });
     const failed: unknown[] = [];
     const s = await open(h.factory, { heartbeatMs: 15, onFailed: (err) => void failed.push(err) });
-    const err = await s.sendFrameInput({}).catch((e: unknown) => e);
+    const err = await sendFrameInput(s, 'b-9', 1).catch((e: unknown) => e);
     expect(isFrameTargetMismatch(err)).toBe(true);
     expect(isBattleTerminalReject(err)).toBe(true); // 与 BATTLE_ENDED 同族：不可重试
     expect(isBattleEnded(err)).toBe(false); // 但 reason 互斥（不是对局打完）
@@ -183,8 +189,8 @@ describe('① 终态族：BATTLE_NOT_FOUND / BATTLE_FULL 不可重试、终态�
     const h = makeBattleFactory((srv) => {
       let inputs = 0;
       srv.onRequest((req, s) => {
-        if (req.op === BattleOps.joinBattle) return s.replyOK(jsonBytes({ currentFrame: '3' }));
-        if (req.op === BattleOps.sendFrameInput) {
+        if (req.op === STUB_OP_JOIN) return s.replyOK(jsonBytes({ currentFrame: '3' }));
+        if (req.op === STUB_OP_INPUT) {
           inputs += 1;
           if (inputs === 2) s.replyStatusOf(statusOf(BATTLE_NOT_FOUND_CODE, BATTLE_NOT_FOUND_REASON));
           return; // 第一条不回执：由终态本地结算
@@ -210,12 +216,12 @@ describe('① 终态族：BATTLE_NOT_FOUND / BATTLE_FULL 不可重试、终态�
     const h = makeBattleFactory((srv, index) => {
       srv.onRequest((req, s) => {
         if (index === 0) {
-          // 首连正常（JoinBattle 回成功回执）
-          if (req.op === BattleOps.joinBattle) s.replyOK(jsonBytes({ currentFrame: '3' }));
+          // 首连正常（入局回成功回执）
+          if (req.op === STUB_OP_JOIN) s.replyOK(jsonBytes({ currentFrame: '3' }));
           else s.replyOK();
           return;
         }
-        if (req.op === BattleOps.joinBattle) {
+        if (req.op === STUB_OP_JOIN) {
           s.replyStatusOf(statusOf(BATTLE_NOT_FOUND_CODE, BATTLE_NOT_FOUND_REASON)); // 新一代入局被拒
           return;
         }
@@ -246,7 +252,7 @@ describe('② 心跳回执被业务拒绝：记账 + 分类处置', () => {
   it('非终态类（INTERNAL）：计数 + 经心跳失败出口暴露，状态不变、不重连、继续可用', async () => {
     const h = makeBattleFactory((srv) => {
       srv.onRequest((req, s) => {
-        if (req.op === BattleOps.ping) srv.replyStatusOf(statusOf(500, 'INTERNAL'));
+        if (req.op === STUB_OP_PING) srv.replyStatusOf(statusOf(500, 'INTERNAL'));
         else srv.replyOK();
       });
     });
@@ -260,14 +266,14 @@ describe('② 心跳回执被业务拒绝：记账 + 分类处置', () => {
     expect(s.stats().heartbeatWriteFailures).toBe(0); // 业务拒绝与本地写失败分开计
     expect(hbErrs[0]).toBeInstanceOf(BusinessError);
     expect(h.sockets.length).toBe(1); // 心跳被拒从不触发重连
-    await expect(s.sendFrameInput({ input: { frameId: '1' } })).resolves.toBeDefined(); // 继续探测/可用
+    await expect(sendFrameInput(s, 'b-9', 1)).resolves.toBeDefined(); // 继续探测/可用
     await s.close();
   });
 
   it('票类（BATTLE_TICKET_EXPIRED）：不终态、计数，且「需重新取票」信号只上报一次', async () => {
     const h = makeBattleFactory((srv) => {
       srv.onRequest((req, s) => {
-        if (req.op === BattleOps.ping) srv.replyStatusOf(statusOf(401, 'BATTLE_TICKET_EXPIRED'));
+        if (req.op === STUB_OP_PING) srv.replyStatusOf(statusOf(401, 'BATTLE_TICKET_EXPIRED'));
         else srv.replyOK();
       });
     });
@@ -288,7 +294,7 @@ describe('② 心跳回执被业务拒绝：记账 + 分类处置', () => {
   it('终态类（BATTLE_NOT_FOUND）：入终态 + 上报 + 停心跳（不必等业务调用撞墙）', async () => {
     const h = makeBattleFactory((srv) => {
       srv.onRequest((req, s) => {
-        if (req.op === BattleOps.ping) srv.replyStatusOf(statusOf(BATTLE_NOT_FOUND_CODE, BATTLE_NOT_FOUND_REASON));
+        if (req.op === STUB_OP_PING) srv.replyStatusOf(statusOf(BATTLE_NOT_FOUND_CODE, BATTLE_NOT_FOUND_REASON));
         else srv.replyOK();
       });
     });
@@ -348,7 +354,7 @@ describe('④ 可观测：拨号（握手）/重连/心跳失败只读统计', (
     const ws = h.sockets[0]!;
     const orig = ws.send.bind(ws);
     ws.send = (data: ArrayBuffer | Uint8Array): void => {
-      if (isOpFrame(data, BattleOps.ping)) throw new Error('注入写失败');
+      if (isOpFrame(data, STUB_OP_PING)) throw new Error('注入写失败');
       orig(data);
     };
     await waitFor(() => s.stats().heartbeatWriteFailures >= 2, 2000);

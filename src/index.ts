@@ -67,7 +67,15 @@ export {
   parseDirectPlan,
   type DirectPlan,
 } from './battle/plan.js';
-export { BattleOps, BattlePushOps, DEFAULT_BATTLE_OPS, type BattleOpSet } from './battle/ops.js';
+export {
+  OP_BATTLE_END_NOTIFY,
+  OP_FRAME_BROADCAST,
+  OP_JOIN_BATTLE,
+  OP_PING,
+  OP_PLAYER_OUT_NOTIFY,
+  OP_SEND_FRAME_INPUT,
+  OP_SYNC_FRAMES,
+} from './battle/opkeys.js';
 export { ticketSlotValue } from './battle/ticket.js';
 export {
   BATTLE_ENDED_CODE,
@@ -95,6 +103,8 @@ export {
   type BattleSession,
   type BattleSessionOptions,
   type BattleSessionState,
+  type ProbeSpec,
+  type ReplayStep,
 } from './battle/session.js';
 export type { BattleSessionStats } from './battle/stats.js';
 export {

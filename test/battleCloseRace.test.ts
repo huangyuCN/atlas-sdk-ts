@@ -12,8 +12,8 @@
 import { describe, expect, it } from 'vitest';
 import { waitFor } from './helpers.js';
 import { MockBattleServer, MockWebSocket, jsonBytes } from './battleMock.js';
+import { STUB_OP_JOIN, STUB_OP_PING, battleDefaults } from './battleStub.js';
 import {
-  BattleOps,
   openBattleSession,
   parseDirectPlan,
   type BattleSession,
@@ -55,7 +55,7 @@ function makeGatedFactory(): GatedHarness {
     const ws = new MockWebSocket(url);
     const srv = new MockBattleServer(ws);
     srv.onRequest((req, s) => {
-      if (req.op === BattleOps.joinBattle) s.replyOK(jsonBytes({ currentFrame: '3' }));
+      if (req.op === STUB_OP_JOIN) s.replyOK(jsonBytes({ currentFrame: '3' }));
       else s.replyOK();
     });
     sockets.push(ws);
@@ -73,9 +73,9 @@ function makeGatedFactory(): GatedHarness {
   };
 }
 
-/** 带 mock WS 工厂打开一条直连会话（各用例统一入口）。 */
+/** 带 mock WS 工厂打开一条直连会话（各用例统一入口）：探针/重放由测试侧替身给出。 */
 function open(factory: WebSocketFactory, opts: BattleSessionOptions = {}): Promise<BattleSession> {
-  return openBattleSession(planOf(), { wsFactory: factory, ...opts });
+  return openBattleSession(planOf(), { ...battleDefaults('b-9'), wsFactory: factory, ...opts });
 }
 
 /** sleep 真定时器等待。 */
@@ -103,7 +103,7 @@ describe('P0-7：close() × 在途重连拨号竞态', () => {
     await sleep(80); // 覆盖 ≥5 个心跳周期
     expect(s.state()).toBe('closed'); // ① 状态不因迟到拨号回退 connected
     expect(s.ended()).toBe(false);
-    expect(h.servers[1]!.frames.length).toBe(0); // ② close 后零写入（JoinBattle/SyncFrames/Ping 全无）
+    expect(h.servers[1]!.frames.length).toBe(0); // ② close 后零写入（重放入局/补帧/探针全无）
     expect(h.sockets[1]!.sent.length).toBe(0);
     expect(h.sockets[1]!.closedBySdk).toBe(true); // ③ socket 被回收（不泄漏）
     expect(failed).toEqual([]); // 关闭不是失败：不触发 onFailed
@@ -117,7 +117,7 @@ describe('P0-7：close() × 在途重连拨号竞态', () => {
       const ws = new MockWebSocket(url);
       const srv = new MockBattleServer(ws);
       srv.onRequest((req, s) => {
-        if (req.op === BattleOps.joinBattle) s.replyOK(jsonBytes({ currentFrame: '3' }));
+        if (req.op === STUB_OP_JOIN) s.replyOK(jsonBytes({ currentFrame: '3' }));
         else s.replyOK();
       });
       sockets.push(ws);
@@ -138,6 +138,6 @@ describe('P0-7：close() × 在途重连拨号竞态', () => {
     await sleep(400); // 远超退避档位：未被打断则必然再拨
     expect(sockets.length).toBe(2); // 关闭后不再拨号
     expect(s.state()).toBe('closed');
-    for (const srv of servers) expect(srv.frames.filter((f) => f.op === BattleOps.ping).length).toBe(0);
+    for (const srv of servers) expect(srv.frames.filter((f) => f.op === STUB_OP_PING).length).toBe(0);
   });
 });

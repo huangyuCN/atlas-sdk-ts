@@ -1,12 +1,10 @@
 // 战斗直连的帧侧小工具（纯函数，从 session.ts 拆出控制单文件规模）：
-//   - 帧广播载荷的帧号提取（ver=1 protojson 的 frame.frameId，uint64 下发为字符串）；
 //   - 读循环退出 / 写帧失败的错误归类（与内核 readloop/channel 同口径）；
-//   - 建连失败的重试准入与归类（升级阶段 vs 升级后恢复、票类拒绝 vs 网络抖动）；
-//   - 字面量对象判定（请求体补 battleId 时区分生成 DTO 实例）。
+//   - 建连失败的重试准入与归类（升级阶段 vs 升级后重放、票类拒绝 vs 网络抖动）。
+// 游戏域消息的载荷构造/解析不在这里（已迁出 SDK：帧号由调用方注入钩子，载荷原样透传）。
 import { BusinessError, NetworkError, ProtocolError } from '../client/errors.js';
 import { ProtocolError as FrameProtocolError } from '../frame/protocolError.js';
 import { VERSION, VERSION_2 } from '../frame/constants.js';
-import { decodeUtf8 } from '../frame/utf8.js';
 import { edgeRejectedError } from './errors.js';
 
 /** isSupportedPayloadVersion 判定载荷编码版本是否在白名单 {1,2} 内：ver=1（protojson，
@@ -16,7 +14,7 @@ export function isSupportedPayloadVersion(version: number): boolean {
   return version === VERSION || version === VERSION_2;
 }
 
-/** ConnectPhase 一次建连尝试的阶段（升级 vs 升级后的入局/补帧恢复）。 */
+/** ConnectPhase 一次建连尝试的阶段（升级 vs 升级后的重放）。 */
 export type ConnectPhase = 'dial' | 'restore';
 
 /** RetryGate 重连退避的准入条件（每次尝试前由会话按当前情形组装）。 */
@@ -78,41 +76,4 @@ export function classifyExit(err: unknown): NetworkError | ProtocolError {
 export function classifyWriteError(err: unknown): NetworkError | ProtocolError {
   if (err instanceof ProtocolError) return err;
   return new NetworkError('发送失败: ' + (err instanceof Error ? err.message : String(err)), err);
-}
-
-/** frameIdOfProtojson 从 protojson 帧广播载荷取帧号（uint64 下发为字符串）。 */
-export function frameIdOfProtojson(payload: Uint8Array): number {
-  try {
-    const obj = JSON.parse(decodeUtf8(payload)) as { frame?: { frameId?: unknown } };
-    return toFrameId(obj.frame?.frameId);
-  } catch {
-    return -1;
-  }
-}
-
-/** toFrameId 归一帧号（字符串/数值皆可；非法返回 -1）。 */
-export function toFrameId(v: unknown): number {
-  const n = typeof v === 'string' ? Number(v) : typeof v === 'number' ? v : Number.NaN;
-  return Number.isInteger(n) && n >= 0 ? n : -1;
-}
-
-/** isPlainObject 判定字面量对象（数组/null 不算）。 */
-export function isPlainObject(v: unknown): v is Record<string, unknown> {
-  if (typeof v !== 'object' || v === null || Array.isArray(v)) return false;
-  const proto: unknown = Object.getPrototypeOf(v);
-  return proto === Object.prototype || proto === null;
-}
-
-/** withBattleId 补齐客体寻址字段：字面量对象合并 battleId（显式值优先），
- *  生成 DTO 实例原样透传（其 battleId 由调用方设置）。 */
-export function withBattleId(battleId: string, req: unknown): unknown {
-  if (req === undefined || req === null) return { battleId };
-  if (!isPlainObject(req)) return req;
-  return { battleId, ...req };
-}
-
-/** syncRequest 组补帧请求：uint64 按 protojson 约定下发**字符串**。 */
-export function syncRequest(battleId: string, frame: number): Record<string, unknown> {
-  const n = Number.isFinite(frame) && frame > 0 ? Math.trunc(frame) : 0;
-  return { battleId, lastSeenFrame: String(n) };
 }

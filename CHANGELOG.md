@@ -7,6 +7,47 @@
 
 > 0.7.0 之前本仓无独立变更日志，下方 0.6.0 / 0.5.0 条目按 git 历史**追记**。
 
+## 未发布（Unreleased）
+
+游戏域消息迁出 SDK：SDK 只留传输/会话 + 契约消息（frame / edge / session / common / route /
+lockstep），battle / game / matcher 的 DTO 与手写包装改由游戏自己的协议包（模板仓
+`protocol/`）按 `.proto` 生成。本仓 `package.json` 不依赖它，也不 import 它。
+
+### ⚠ 破坏性变更
+
+- **游戏域生成物与手写 op 集合删除**：`examples/gen/api/{battle,game,matcher}/**` 与
+  `src/battle/ops.ts` 删除，`BattleOps` / `BattlePushOps` / `BattleOpSet` / `DEFAULT_BATTLE_OPS`
+  不再导出；`ops` 选项随之删除（会话自身只认固定的寻址键）。
+  **迁移**：改用游戏协议包生成的 DTO 与 op 常量；SDK 侧用 `OP_*` 常量（纯寻址键）。
+- **类型化战斗方法删除**：`joinBattle` / `sendFrameInput` / `syncFrames` 从 `BattleSession`
+  移除，改为通用 `invoke(op, req?, ...opts)`。SDK 不再自动补 `battleId`、不再把
+  `lastSeenFrame` 改写成 protojson 字符串——**载荷原样上发**，字段由调用方构造。
+- **建连不再自动入局**：`autoJoin` 选项删除；`openBattleSession` 只完成升级（带票），
+  入局需调用方在 open 后自行 `invoke`。重连重放改由 `replay` 配置（`ReplayStep[]`，
+  载荷用当前 `lastSeenFrame()` 生成；缺省空 = 重连只重建连接、不重放业务 op）。
+- **心跳需显式配置探针**：新增 `probe`（`{ op, req }`，由游戏协议包构造）。未配置时心跳
+  循环不启动、**一个字节都不发**（不再内建 `Ping` + `{battleId}` 载荷）；`heartbeatMs`
+  只控制周期。迁移：`probe: { op: OP_PING, req: pingReq }`。
+- **帧号提取不再内建**：`frameNumberOf` 钩子对**所有**载荷编码生效（ver=1 的 protojson
+  `frame.frameId` 不再由 SDK 解析）。未注入时 `lastSeenFrame()` 恒 0，重连补帧退化为全量
+  （不报错）。迁移：注入钩子（真实项目用协议包解 `FrameBroadcast` 取 `frame.frame_id`）。
+
+### 新增
+
+- `OP_PING` / `OP_JOIN_BATTLE` / `OP_SEND_FRAME_INPUT` / `OP_SYNC_FRAMES` /
+  `OP_FRAME_BROADCAST` / `OP_BATTLE_END_NOTIFY` / `OP_PLAYER_OUT_NOTIFY`：会话自身碰到的
+  op 寻址键（不是消息类型）。
+- `ProbeSpec` / `ReplayStep` 类型与 `BattleSession.invoke`。
+- 依赖边界守卫 `test/gameDomainGuard.test.ts`：游戏域生成物目录/import、手写 op 集合、
+  生成脚本与 `package.json` 依赖一旦回流即红。
+
+### 文档
+
+- `scripts/gen-dto.sh` 只导契约消息（session + lockstep），头部注释写明「契约消息边界」；
+  CI 的「重生成无 diff」门禁同步改口径。
+- README / 示例改用裸字节与本地结构（不依赖游戏协议包）；`examples/battle-direct-loop.mjs`
+  用 `session.invoke` + 本地载荷构造驱动。
+
 ## 0.7.0 — 2026-10-09
 
 战斗帧直连（阶段 3）整批上线 npm。对应提交区间 `a9bff93`（0.6.0）→ `9c9699d`。

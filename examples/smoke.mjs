@@ -11,7 +11,6 @@
 // （仅探针，不做业务 Login——会话绑定业务通道）。退出码 0 = 冒烟通过。
 // 依赖 dist 产物：先 pnpm build。
 import {
-  BusinessError,
   CLIENT_VERSION,
   HeartbeatOperation,
   isBusinessError,
@@ -29,7 +28,6 @@ import {
 import { newTCPClient, newUDPClient, newDualClientNode } from '../dist/node.js';
 import { ProtobufSerializer } from '../dist/protobuf.js';
 import {
-  joinBattleOp,
   newGatewayV1SessionProtocol,
   registry,
   schemas,
@@ -41,10 +39,10 @@ import {
 // ---- 协议常量与 DTO ----
 // op 名与 DTO 全部来自模板仓 descriptor set 的生成物（examples/gen/，见
 // scripts/gen-dto.sh）：客户端 op 即 service/rpc 全名，本文件不写字面量。
-// 登录/注册/会话心跳经 Session 接缝发送（op 名由接缝提供），这里只保留手工驱动的
-// 心跳与战斗探针所需的 op。
+// 登录/注册/会话心跳经 Session 接缝发送（op 名由接缝提供），这里只保留手工驱动的心跳 op。
+// 游戏域消息（battle/game/matcher）已迁出 SDK：冒烟不再发战斗 op（其编解码归游戏协议包，
+// 契约消息的 ver=2 编解码已由登录/心跳等会话 op 覆盖）。
 const opHeartbeat = sessionOps.heartbeat;
-const opJoinBattle = joinBattleOp;
 const SMOKE_PASSWORD = 'pw-123456';
 
 
@@ -266,22 +264,6 @@ async function runBattleChannel(form) {
   try {
     if (!(await probeAlive())) fail(`${form} 通道往返探针失败`);
     log(`${form} 通道往返探针 OK`);
-    // 战斗 payload 编解码验证（protobuf 模式）：未登录的战斗通道直接发 JoinBattle
-    // ——服务端按 ver=2 分派 codec 解码后因会话无效回业务拒绝（BusinessError）即
-    // 证明 payload 编解码正确（协议错误/解码失败才说明编解码问题）。身份由连接/
-    // 帧会话槽承载，消息体无身份字段（battle.v1.JoinBattleReq 只有 battle_id）。
-    if (isProtobuf) {
-      try {
-        await client.invoke(opJoinBattle, mkReq('JoinBattleReq', { battleId: 'b1' }));
-        fail(`${form} JoinBattle 应被拒绝（未登录战斗通道），却成功`);
-      } catch (err) {
-        if (err instanceof BusinessError) {
-          log(`${form} JoinBattle 业务拒绝（protobuf 编码解码正确）`);
-        } else {
-          fail(`${form} JoinBattle 收到非业务错误 ${err?.message ?? err}（payload 编解码可能失败）`);
-        }
-      }
-    }
     if (reconnectAfter > 0) {
       log(`${reconnectAfter}ms 后请重启 gateway（等待死链重拨）`);
       await sleep(reconnectAfter);
@@ -319,7 +301,7 @@ async function runDual() {
       path: '/ws',
       opts: [
         WithOnReconnected(async () => {
-          // 战斗通道重绑定（模板 JoinBattle 语义的冒烟替身）：战斗通道传输心跳
+          // 战斗通道重绑定（真实项目用游戏协议包的战斗 op；本冒烟以传输心跳往返为替身）：
           // 往返即证明重连后可用；战斗通道不做业务 Login（会话绑定业务通道）。
           joinCalls += 1;
           await client.channel('battle').invoke(HeartbeatOperation, null);

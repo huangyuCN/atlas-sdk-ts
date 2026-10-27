@@ -1,8 +1,8 @@
 // gatewayv1 schema 与「会话协议接缝参考实现」（JS 版）：真机冒烟用的 DTO/schema 装配。
 //
-// 单一来源：schema 与 op 名全部来自模板仓 api/gateway/v1/session.proto 与
-// api/battle/v1/battle_service.proto 的 descriptor set（scripts/gen-dto.sh 用
-// protoc-gen-es 生成到 examples/gen/，不 vendored .proto、不手写 descriptor）。
+// 单一来源：schema 与 op 名全部来自模板仓 api/gateway/v1/session.proto 的 descriptor set
+// （scripts/gen-dto.sh 用 protoc-gen-es 生成到 examples/gen/，不 vendored .proto、不手写
+// descriptor）。游戏域消息（battle/game/matcher）已迁出 SDK，示例不依赖它们。
 // 本模块把这些生成物组装成两件事：
 //   1. 冒烟用 registry/schemas（ProtobufSerializer 的 ver=2 编码）；
 //   2. gatewayV1SessionProtocol——项目侧接入 SDK 的「一行接缝」示例（op 名由生成
@@ -22,11 +22,6 @@ import {
   ResumeRequestSchema,
   Session as SessionService,
 } from './gen/api/gateway/v1/session_pb.js';
-import {
-  JoinBattleReplySchema,
-  JoinBattleReqSchema,
-  BattleService,
-} from './gen/api/battle/v1/battle_service_pb.js';
 
 /** rpcOp 由生成的服务描述符推导客户端 op 全名（/包.服务/方法）——op 寻址键的
  * 唯一来源是 proto，示例里不写字符串字面量。 */
@@ -44,9 +39,6 @@ export const sessionOps = {
 /** kickedNotifyOp 是被挤下线推送的 op（推送按消息全名寻址）。 */
 export const kickedNotifyOp = `/${KickedNotifySchema.typeName}`;
 
-/** joinBattleOp 是战斗通道加入战斗的 op（battle 域 CLIENT 方法）。 */
-export const joinBattleOp = rpcOp(BattleService, 'joinBattle');
-
 // registry：ProtobufSerializer 用的类型名 → schema 查找表（ver=2 载荷编解码）。
 export const registry = createRegistry(
   RegisterRequestSchema,
@@ -58,8 +50,6 @@ export const registry = createRegistry(
   LogoutRequestSchema,
   HeartbeatRequestSchema,
   HeartbeatReplySchema,
-  JoinBattleReqSchema,
-  JoinBattleReplySchema,
 );
 
 export const schemas = {
@@ -69,8 +59,6 @@ export const schemas = {
   LoginReply: LoginReplySchema,
   HeartbeatRequest: HeartbeatRequestSchema,
   HeartbeatReply: HeartbeatReplySchema,
-  JoinBattleReq: JoinBattleReqSchema,
-  JoinBattleReply: JoinBattleReplySchema,
 };
 
 export function newMsg(schema, data) {

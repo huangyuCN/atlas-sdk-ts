@@ -1,11 +1,11 @@
-// 战斗直连会话（openBattleSession）测试：升级带票、逐帧会话槽带票、三个战斗 op 直连、
-// 推送回调、断线重连（重新 JoinBattle/SyncFrames 补帧）、票过期回退与
-// 「接入层拒连 vs 网络断开」的错误分类（规格 §7 / §9.4 / §9.5）。
+// 战斗直连会话（openBattleSession）测试：升级带票、逐帧会话槽带票、业务 op 经通用 invoke 直连、
+// 推送回调、断线重连（按配置重放入局/补帧）、票过期回退与「接入层拒连 vs 网络断开」的
+// 错误分类（规格 §7 / §9.4 / §9.5）。
 import { describe, expect, it } from 'vitest';
 import { waitFor } from './helpers.js';
 import { MockBattleServer, jsonBytes, makeBattleFactory } from './battleMock.js';
+import { STUB_OP_JOIN, battleDefaults, join, sendFrameInput, syncFrames } from './battleStub.js';
 import {
-  BattleOps,
   BusinessError,
   NetworkError,
   ProtocolError,
@@ -39,24 +39,26 @@ function planOf(address = '10.0.0.9:7100') {
 /** 默认服务端行为：JoinBattle 回成功回执（其余 op 回空成功）。 */
 function joinOK(srv: MockBattleServer): void {
   srv.onRequest((req, s) => {
-    if (req.op === BattleOps.joinBattle) s.replyOK(jsonBytes({ currentFrame: '3' }));
+    if (req.op === STUB_OP_JOIN) s.replyOK(jsonBytes({ currentFrame: '3' }));
     else s.replyOK();
   });
 }
 
-/** 带 mock WS 工厂打开一条直连会话（各用例统一入口）。 */
+/** 带 mock WS 工厂打开一条直连会话（各用例统一入口）：探针/重放/帧号钩子由测试侧替身给出
+ *  （生产同样由调用方用游戏协议包提供，SDK 不内建）。 */
 function open(factory: WebSocketFactory, opts: BattleSessionOptions = {}): Promise<BattleSession> {
-  return openBattleSession(planOf(), { wsFactory: factory, ...opts });
+  return openBattleSession(planOf(), { ...battleDefaults('b-9'), wsFactory: factory, ...opts });
 }
 
 describe('openBattleSession 建连与首帧', () => {
   it('升级 URL 带 ?ticket=<base64url>，首帧会话槽字节与票据密文逐字节一致', async () => {
     const h = makeBattleFactory(joinOK);
     const s = await open(h.factory);
+    await join(s, 'b-9');
     // 升级请求行：地址取本局推送的 WS 面，票为 base64url（RawURLEncoding，无填充）。
     expect(h.urls[0]).toBe(`ws://10.0.0.9:7100/?ticket=${SLOT}`);
     const first = h.servers[0]!.frames[0]!;
-    expect(first.op).toBe(BattleOps.joinBattle);
+    expect(first.op).toBe(STUB_OP_JOIN);
     expect(first.session).toBe(SLOT);
     // 逐字节一致：槽值用 Node Buffer（独立于被测实现）解回票密文。
     expect(new Uint8Array(Buffer.from(first.session, 'base64url'))).toEqual(TICKET);
@@ -68,6 +70,7 @@ describe('openBattleSession 建连与首帧', () => {
   it('请求帧置位 FLAG_SESSION 与 FLAG_REQUEST_ID（段序 operation → 槽 → 幂等键 → 载荷）', async () => {
     const h = makeBattleFactory(joinOK);
     const s = await open(h.factory);
+    await join(s, 'b-9');
     const f = h.servers[0]!.frames[0]!;
     expect((f.header.flags ?? 0) & 0x01).toBe(0x01); // FLAG_SESSION
     expect((f.header.flags ?? 0) & 0x02).toBe(0x02); // FLAG_REQUEST_ID
@@ -75,18 +78,19 @@ describe('openBattleSession 建连与首帧', () => {
     await s.close();
   });
 
-  it('sendFrameInput 自动补 battleId；syncFrames 的 lastSeenFrame 按 protojson 字符串下发', async () => {
+  it('业务 op 经通用 invoke 上发：载荷由调用方构造、逐字写线，每帧带同一张票槽', async () => {
     const h = makeBattleFactory(joinOK);
     const s = await open(h.factory);
-    await s.sendFrameInput({ input: { frameId: '4', payload: 'AQ==' } });
-    await s.syncFrames(6);
+    await sendFrameInput(s, 'b-9', 4, 'AQ==');
+    await syncFrames(s, 'b-9', 6);
     const frames = h.servers[0]!.frames;
-    const input = frames.find((f) => f.op === BattleOps.sendFrameInput)!;
+    const input = frames.find((f) => f.op === '/battle.v1.BattleService/SendFrameInput')!;
+    // SDK 不再补/改字段：写线载荷就是调用方给的对象（字节口径）。
     expect(JSON.parse(new TextDecoder().decode(input.payload))).toEqual({
       battleId: 'b-9',
       input: { frameId: '4', payload: 'AQ==' },
     });
-    const sync = frames.find((f) => f.op === BattleOps.syncFrames)!;
+    const sync = frames.find((f) => f.op === '/battle.v1.BattleService/SyncFrames')!;
     expect(JSON.parse(new TextDecoder().decode(sync.payload))).toEqual({
       battleId: 'b-9',
       lastSeenFrame: '6',
@@ -97,7 +101,9 @@ describe('openBattleSession 建连与首帧', () => {
 
   it('请求无回执 → TimeoutError（可判定，不静默成功）', async () => {
     const h = makeBattleFactory(() => {}); // 服务端不回任何回执
-    await expect(open(h.factory, { invokeTimeoutMs: 30 })).rejects.toBeInstanceOf(TimeoutError);
+    const s = await open(h.factory, { invokeTimeoutMs: 30 });
+    await expect(join(s, 'b-9')).rejects.toBeInstanceOf(TimeoutError);
+    await s.close();
   });
 });
 
@@ -137,7 +143,7 @@ describe('战斗域推送回调', () => {
     });
     h.servers[0]!.notify(FRAME_BROADCAST, jsonBytes({ frame: { frameId: '1' } }));
     await waitFor(() => s.lastSeenFrame() === 1);
-    await expect(s.syncFrames(1)).resolves.toBeDefined(); // 读循环未被打断
+    await expect(syncFrames(s, 'b-9', 1)).resolves.toBeDefined(); // 读循环未被打断
     await s.close();
   });
 });
@@ -155,28 +161,44 @@ describe('错误分类：接入层拒连 / 票过期 / 网络断开', () => {
     expect(h.urls.length).toBe(1); // 不重试
   });
 
-  it('升级后无回执被断 → 判为接入层拒连（不重试）', async () => {
-    const h = makeBattleFactory((srv) => {
+  it('重连重放无回执即被断 → 重连窗口用尽判接入层拒连（不无限重试）', async () => {
+    const h = makeBattleFactory((srv, index) => {
       srv.onRequest((req, s) => {
-        if (req.op === BattleOps.joinBattle) s.drop(); // 升级成功但无任何回执即断开
+        if (index === 0) {
+          if (req.op === STUB_OP_JOIN) s.replyOK(jsonBytes({ currentFrame: '3' })); // 首连正常
+          else s.replyOK();
+          return;
+        }
+        if (req.op === STUB_OP_JOIN) s.drop(); // 重连重放：升级成功但无任何回执即断开
       });
     });
-    const err = await open(h.factory).catch((e: unknown) => e);
-    expect(isEdgeRejected(err)).toBe(true);
-    await new Promise((r) => setTimeout(r, 30));
-    expect(h.urls.length).toBe(1);
+    const failed: unknown[] = [];
+    const s = await open(h.factory, {
+      reconnectWindowMs: 60,
+      backoffBaseMs: 5,
+      backoffMaxMs: 10,
+      onFailed: (err) => void failed.push(err),
+    });
+    await join(s, 'b-9');
+    h.servers[0]!.drop(); // 断线 → 自动重连 → 重放无回执 → 窗口用尽
+    await waitFor(() => s.state() === 'failed', 3000);
+    expect(isEdgeRejected(failed[0])).toBe(true); // 无任何回执：票可能失效，判接入层拒连
+    expect(h.urls.length).toBeGreaterThan(1);
+    await s.close();
   });
 
   it('票过期（服务端 reason BATTLE_TICKET_EXPIRED）→ 可判定业务错误供上层重新匹配', async () => {
     const h = makeBattleFactory((srv) => {
       srv.onRequest((req, s) => {
-        if (req.op === BattleOps.joinBattle) s.replyStatus('BATTLE_TICKET_EXPIRED');
+        if (req.op === STUB_OP_JOIN) s.replyStatus('BATTLE_TICKET_EXPIRED');
       });
     });
-    const err = await open(h.factory).catch((e: unknown) => e);
+    const s = await open(h.factory);
+    const err = await join(s, 'b-9').catch((e: unknown) => e);
     expect(err).toBeInstanceOf(BusinessError);
     expect(isBattleTicketExpired(err)).toBe(true);
     expect(h.urls.length).toBe(1); // 票过期不重试，回业务链路重新取票
+    await s.close();
   });
 
   it('会话中途网络断开 → 自动退避重连（同一张票重新升级），非协议错误', async () => {
@@ -189,7 +211,7 @@ describe('错误分类：接入层拒连 / 票过期 / 网络断开', () => {
     await s.close();
   });
 
-  it('关闭后不再自动重连；close 幂等；关闭后调用战斗 op 报 NetworkError', async () => {
+  it('关闭后不再自动重连；close 幂等；关闭后调用业务 op 报 NetworkError', async () => {
     const h = makeBattleFactory(joinOK);
     const s = await open(h.factory, { backoffBaseMs: 5, backoffMaxMs: 10 });
     await s.close();
@@ -198,7 +220,7 @@ describe('错误分类：接入层拒连 / 票过期 / 网络断开', () => {
     await new Promise((r) => setTimeout(r, 40));
     expect(h.urls.length).toBe(1);
     expect(s.state()).toBe('closed');
-    await expect(s.joinBattle()).rejects.toBeInstanceOf(NetworkError);
+    await expect(join(s, 'b-9')).rejects.toBeInstanceOf(NetworkError);
   });
 
   it('接入层拒连不是 ProtocolError（协议错误才终止不重连）', async () => {
@@ -211,7 +233,7 @@ describe('错误分类：接入层拒连 / 票过期 / 网络断开', () => {
 });
 
 describe('reconnect 重连与补帧', () => {
-  it('重连后重新 JoinBattle 并以 SyncFrames(last_seen_frame) 补帧，槽仍带同一张票', async () => {
+  it('重连后按配置重放入局，并以 last_seen_frame 补帧，槽仍带同一张票', async () => {
     const h = makeBattleFactory(joinOK);
     const s = await open(h.factory, { backoffBaseMs: 5, backoffMaxMs: 10 });
     h.servers[0]!.notify(FRAME_BROADCAST, jsonBytes({ frame: { frameId: '7' } }));
@@ -219,10 +241,10 @@ describe('reconnect 重连与补帧', () => {
     h.servers[0]!.drop();
     await waitFor(() => h.servers.length >= 2, 3000);
     const re = h.servers[1]!;
-    await waitFor(() => re.countOp(BattleOps.syncFrames) === 1, 3000);
-    expect(re.countOp(BattleOps.joinBattle)).toBe(1);
+    await waitFor(() => re.countOp('/battle.v1.BattleService/SyncFrames') === 1, 3000);
+    expect(re.countOp(STUB_OP_JOIN)).toBe(1);
     expect(re.frames.every((f) => f.session === SLOT)).toBe(true);
-    const sync = re.frames.find((f) => f.op === BattleOps.syncFrames)!;
+    const sync = re.frames.find((f) => f.op === '/battle.v1.BattleService/SyncFrames')!;
     expect(JSON.parse(new TextDecoder().decode(sync.payload)))
       .toEqual({ battleId: 'b-9', lastSeenFrame: '7' });
     expect(s.state()).toBe('connected');

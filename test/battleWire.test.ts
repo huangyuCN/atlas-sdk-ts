@@ -9,8 +9,8 @@ import { createServer, type IncomingMessage, type Server } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { afterEach, describe, expect, it } from 'vitest';
 import { buildReplyOK, bytesOf, concatFrame } from './helpers.js';
+import { STUB_OP_INPUT, STUB_OP_JOIN, join, sendFrameInput } from './battleStub.js';
 import {
-  BattleOps,
   MsgType,
   isEdgeRejected,
   openBattleSession,
@@ -208,12 +208,13 @@ describe('战斗直连 wire 一致性（真实 WS 升级）', () => {
       srv.send(serverWsFrame(reply));
     };
     const session = await openBattleSession(plan, { path: '/' });
+    await join(session, 'b-9');
     // ① 升级请求行走的是本局推送的 WS 面地址，票在 query（base64url，无填充）。
     expect(srv.upgradeUrl).toBe(`/?ticket=${SLOT}`);
-    // ② 首帧 = JoinBattle，其会话槽字节 = base64url 取值的 ASCII（battle 侧按 base64url 解回票密文）。
+    // ② 首帧 = 入局，其会话槽字节 = base64url 取值的 ASCII（battle 侧按 base64url 解回票密文）。
     const first = srv.frames[0]!;
     const body = bodyOf(first);
-    expect(opOf(body)).toBe(BattleOps.joinBattle);
+    expect(opOf(body)).toBe(STUB_OP_JOIN);
     expect(Array.from(slotOf(body))).toEqual(Array.from(new TextEncoder().encode(SLOT)));
     expect(new TextDecoder().decode(slotOf(body))).toBe(SLOT);
     expect(new Uint8Array(Buffer.from(SLOT, 'base64url'))).toEqual(TICKET);
@@ -222,7 +223,7 @@ describe('战斗直连 wire 一致性（真实 WS 升级）', () => {
     expect(queryTicket).toBe(SLOT);
     expect(new Uint8Array(Buffer.from(queryTicket, 'base64url'))).toEqual(TICKET);
     // ④ 直连链路可用：后续战斗 op 也带同一张票（槽字节不变）。
-    await session.sendFrameInput({ input: { frameId: '1' } });
+    await sendFrameInput(session, 'b-9', 1);
     expect(srv.frames.length).toBe(2);
     expect(Array.from(slotOf(bodyOf(srv.frames[1]!)))).toEqual(Array.from(new TextEncoder().encode(SLOT)));
     await session.close();

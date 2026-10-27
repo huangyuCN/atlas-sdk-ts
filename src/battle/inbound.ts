@@ -11,12 +11,12 @@
 import type { PendingOutcome } from '../client/channelTypes.js';
 import { ProtocolError } from '../client/errors.js';
 import type { ChannelTransport } from '../client/transport.js';
-import { MsgType, VERSION, type Header } from '../frame/constants.js';
+import { MsgType, type Header } from '../frame/constants.js';
 import { parseRequestBody } from '../frame/body.js';
 import { decodeReply } from '../frame/reply.js';
 import type { Status } from '../frame/status.js';
-import type { BattleOpSet } from './ops.js';
-import { frameIdOfProtojson, isSupportedPayloadVersion } from './wire.js';
+import { OP_BATTLE_END_NOTIFY, OP_FRAME_BROADCAST } from './opkeys.js';
+import { isSupportedPayloadVersion } from './wire.js';
 
 /** InboundHooks 收帧面与会话的接缝（会话注入；本模块不持有会话状态）。 */
 export interface InboundHooks {
@@ -24,8 +24,6 @@ export interface InboundHooks {
   readonly version: number;
   /** 单帧 body 上限。 */
   readonly maxBodySize: number;
-  /** 本会话的 op 集合（帧广播 / 结束通知识别）。 */
-  readonly ops: BattleOpSet;
   /** settle 结算一条响应（会话查 in-flight 表；恰一次）。 */
   settle(seq: number, outcome: PendingOutcome): void;
   /** takeHeartbeat 划掉一条在途心跳（命中即说明该回执属于心跳，没有 pending）。 */
@@ -42,9 +40,9 @@ export interface InboundHooks {
   onBattleEnd?: ((payload: Uint8Array, version: number) => void) | undefined;
   /** 任意战斗域推送回调（op 原样透传）。 */
   onPush?: ((op: string, payload: Uint8Array, version: number) => void) | undefined;
-  /** 帧号提取钩子：**ver=1 恒走内建**（protojson 的 frame.frameId，注入也不接管）；
-   *  ver≠1（如 ver=2 二进制）非自描述，只认本钩子；返回 null 表示本帧取不到帧号
-   *  （不推进补帧基准、不报错——与 Go 的 FrameNumberFunc 同口径）。 */
+  /** 帧号提取钩子：**所有版本都只认本钩子**（帧广播字段属游戏协议，SDK 不持类型、
+   *  不猜编码）；返回 null 表示本帧取不到帧号（不推进补帧基准、不报错——与 Go 的
+   *  FrameNumberFunc 同口径）。 */
   frameNumberOf?: ((payload: Uint8Array, version: number) => number | null) | undefined;
 }
 
@@ -129,10 +127,10 @@ export class BattleInbound {
    *  （服务端有界重投 + 重连补投都会重复到达，业务回调必须恰一次）。 */
   private dispatch(op: string, payload: Uint8Array, version: number): void {
     try {
-      if (op === this.hooks.ops.frameBroadcast) {
+      if (op === OP_FRAME_BROADCAST) {
         this.noteFrame(this.extractFrameId(payload, version));
         this.hooks.onFrame?.(payload, version);
-      } else if (op === this.hooks.ops.battleEndNotify) {
+      } else if (op === OP_BATTLE_END_NOTIFY) {
         if (this.hooks.absorbEnd()) this.hooks.onBattleEnd?.(payload, version);
       }
       this.hooks.onPush?.(op, payload, version);
@@ -141,12 +139,10 @@ export class BattleInbound {
     }
   }
 
-  /** extractFrameId 提取帧广播的帧号：**ver=1 恒走内建**（protojson 的 frame.frameId），
-   *  注入钩子也不接管——调试路径的可读格式语义不被自定义提取器改变（与 Go 同口径）；
-   *  其余版本（ver=2 二进制）非自描述，只认调用方注入的钩子，未注入即取不到（返回 -1 =
-   *  不推进补帧基准，也不报错）。 */
+  /** extractFrameId 提取帧广播的帧号：只认调用方注入的钩子（未注入即取不到，返回 -1 =
+   *  不推进补帧基准，也不报错）。载荷编码（protojson / protobuf）与字段布局都属游戏协议，
+   *  SDK 不持类型、不猜编码；与 Go 去掉内建解析后的口径一致。 */
   private extractFrameId(payload: Uint8Array, version: number): number {
-    if (version === VERSION) return frameIdOfProtojson(payload);
     const custom = this.hooks.frameNumberOf;
     if (custom === undefined) return -1;
     return normalizeFrameNumber(custom(payload, version));

@@ -4,7 +4,7 @@
 //   1) 业务链路经网关 ws://<gateway>（注册/登录 → 入队匹配 → 等成局推送）拿到
 //      { battle_ticket, endpoints }；
 //   2) 按 EDGE_TRANSPORT_WS 取接入层地址，**经接入层直连**（升级 URL 带 base64url 票据，
-//      逐帧会话槽带同一张票）跑 JoinBattle → SendFrameInput → SyncFrames → 收帧广播；
+//      逐帧会话槽带同一张票）跑 入局 → 发帧 → 补帧 → 收帧广播；
 //   3) 保活验收：局中「只发心跳、不发输入」的静默窗口（A 心跳在线），断言未被判出局、
 //      窗口后仍能发帧/补帧；同参数对照 B（心跳关闭）观察是否掉线；
 //   4) 结束收口验收（A3）：跑到对局自然结束（帧上限），断言结束后**零上发**（新增线上帧数
@@ -13,16 +13,20 @@
 //
 // 观测手段：wsFactory 包装真实 WebSocket，按线上字节解码**客户端发出的每一帧**
 //   （readFrameFrom + parseRequestBodyFull，与 SDK 同一份实现）——「只发心跳」不是推断，
-//   而是逐帧计数（Ping 帧数 / SendFrameInput 帧数）。
+//   而是逐帧计数（探针帧数 / 发帧帧数）。
 //
 // 用法：node examples/battle-direct-loop.mjs [--gateway 10.10.9.36:9002]
 //        [--silence-ms 8000] [--heartbeat-ms 2000] [--idle-ms 5000]
 //        [--max-frames 60] [--tick-ms 100] [--ruleset casual]
 // 依赖 dist 产物：先 npx tsup。
 import {
-  BattleOps,
-  BattlePushOps,
   CLIENT_VERSION,
+  OP_BATTLE_END_NOTIFY,
+  OP_JOIN_BATTLE,
+  OP_PING,
+  OP_PLAYER_OUT_NOTIFY,
+  OP_SEND_FRAME_INPUT,
+  OP_SYNC_FRAMES,
   isEdgeRejected,
   MsgType,
   newWSClient,
@@ -34,7 +38,6 @@ import {
 } from '../dist/index.js';
 import { sessionOps } from './gatewayv1.mjs';
 import { matchPushOps, playerOps } from './gamev1.mjs';
-import { PlayerOutNotifySchema } from './gen/api/battle/v1/battle_service_pb.js';
 
 // ---- CLI 参数 ----
 const arg = (name, dflt) => {
@@ -49,9 +52,17 @@ const MAX_FRAMES = Number(arg('max-frames', '60')); // battle 帧上限缺省（
 const TICK_MS = Number(arg('tick-ms', '100')); // battle 帧间隔缺省
 const RULESET = arg('ruleset', 'casual');
 const PASSWORD = 'pw-123456';
-const OP_OUT = `/${PlayerOutNotifySchema.typeName}`;
-/** 结束通知 op（推送按消息完整名寻址；SDK 契约里的 battle.v1 推送 op）。 */
-const OP_END = BattlePushOps.battleEndNotify;
+/** 出局 / 结束通知的推送 op（会话常量；推送按消息完整名寻址）。 */
+const OP_OUT = OP_PLAYER_OUT_NOTIFY;
+const OP_END = OP_BATTLE_END_NOTIFY;
+
+// ---- 线上载荷（示例侧最小形态；真实项目用游戏协议包的生成 DTO 与 op 常量）----
+// 游戏域消息已迁出 SDK：本示例按 protojson 形态手写这三条载荷，SDK 只负责发字节、交回执。
+const joinPayload = (battleId) => ({ battleId });
+/** inputPayload 构造帧输入载荷（payload 是单字节 0 的 base64：证明链路且不推进赛道）。 */
+const inputPayload = (battleId, frameId) => ({ battleId, input: { frameId: String(frameId), payload: 'AA==' } });
+/** syncPayload 构造补帧载荷（uint64 按 protojson 约定下发字符串）。 */
+const syncPayload = (battleId, lastSeenFrame) => ({ battleId, lastSeenFrame: String(lastSeenFrame) });
 
 const T0 = Date.now();
 const log = (...a) => console.log(...a);
@@ -154,7 +165,7 @@ async function enqueue(player) {
   player.plan = parseDirectPlan(notify);
 }
 
-/** openDirect 经接入层直连（升级带票）+ JoinBattle（autoJoin 关，拿 currentFrame）。 */
+/** openDirect 经接入层直连（升级带票）+ 显式入局（拿回执 currentFrame）。 */
 async function openDirect(player, heartbeatMs) {
   const rec = wireRecorder();
   const stats = {
@@ -170,6 +181,7 @@ async function openDirect(player, heartbeatMs) {
   };
   const session = await openBattleSession(player.plan, {
     heartbeatMs,
+    probe: { op: OP_PING, req: { battleId: player.plan.battleId } },
     autoReconnect: false,
     wsFactory: rec.factory,
     onFrame: () => stats.frames.push(Date.now()),
@@ -187,7 +199,7 @@ async function openDirect(player, heartbeatMs) {
     },
     onHeartbeatFailed: (err) => stats.hbFailures.push(err),
   });
-  const join = await session.joinBattle();
+  const join = await session.invoke(OP_JOIN_BATTLE, joinPayload(player.plan.battleId));
   return { session, rec, stats, join };
 }
 
@@ -207,9 +219,9 @@ async function openDirectRetry(player, heartbeatMs, attempts = 10) {
   throw lastErr;
 }
 
-/** sendInput 发一条帧输入（payload 单字节 0：证明链路且不推进赛道）。 */
+/** sendInput 发一条帧输入（载荷见 inputPayload）。 */
 function sendInput(session, frameId) {
-  return session.sendFrameInput({ input: { frameId: String(frameId), payload: 'AA==' } });
+  return session.invoke(OP_SEND_FRAME_INPUT, inputPayload(session.battleId, frameId));
 }
 
 /** waitFrames 等到收到至少 n 条帧广播（超时抛错）。 */
@@ -242,18 +254,18 @@ async function runClosedLoop() {
   const da = await openDirectRetry(a, HEARTBEAT_MS);
   const db = await openDirectRetry(b, HEARTBEAT_MS);
   log(`[闭环] 经接入层直连：${da.session.address}（升级 query 带票 + 逐帧会话槽带票）`);
-  log(`[闭环] JoinBattle OK：A currentFrame=${da.join?.currentFrame} B currentFrame=${db.join?.currentFrame}`);
+  log(`[闭环] 入局 OK：A currentFrame=${da.join?.currentFrame} B currentFrame=${db.join?.currentFrame}`);
   await Promise.all([sendInput(da.session, 1), sendInput(db.session, 1)]);
   await Promise.all([sendInput(da.session, 2), sendInput(db.session, 2)]);
   await Promise.all([waitFrames(da.stats, 1), waitFrames(db.stats, 1)]);
-  const sync = await da.session.syncFrames(1);
+  const sync = await da.session.invoke(OP_SYNC_FRAMES, syncPayload(da.session.battleId, 1));
   log(
-    `[闭环] SendFrameInput OK（A/B 各 2 帧）→ 收到帧广播 A=${da.stats.frames.length} 条/B=${db.stats.frames.length} 条；` +
-      `SyncFrames OK（currentFrame=${sync?.currentFrame} missed=${sync?.missed?.length ?? 0}）`,
+    `[闭环] 发帧 OK（A/B 各 2 帧）→ 收到帧广播 A=${da.stats.frames.length} 条/B=${db.stats.frames.length} 条；` +
+      `补帧 OK（currentFrame=${sync?.currentFrame} missed=${sync?.missed?.length ?? 0}）`,
   );
   log(
-    `[闭环] 接入层直连帧计数：A ping=${da.rec.count(BattleOps.ping)} input=${da.rec.count(BattleOps.sendFrameInput)} ` +
-      `sync=${da.rec.count(BattleOps.syncFrames)}`,
+    `[闭环] 接入层直连帧计数：A ping=${da.rec.count(OP_PING)} input=${da.rec.count(OP_SEND_FRAME_INPUT)} ` +
+      `sync=${da.rec.count(OP_SYNC_FRAMES)}`,
   );
   await closeQuiet(da.session, a.client);
   await closeQuiet(db.session, b.client);
@@ -274,9 +286,9 @@ async function resumeAfterSilence(da, silenceAt) {
     return false;
   }
   await sendInput(da.session, 3);
-  const sync = await da.session.syncFrames(1);
+  const sync = await da.session.invoke(OP_SYNC_FRAMES, syncPayload(da.session.battleId, 1));
   log(
-    `[保活] 窗口后动作：SendFrameInput OK + SyncFrames OK（currentFrame=${sync?.currentFrame}，` +
+    `[保活] 窗口后动作：发帧 OK + 补帧 OK（currentFrame=${sync?.currentFrame}，` +
       `距静默起点 ${((Date.now() - silenceAt) / 1000).toFixed(1)}s）`,
   );
   return true;
@@ -303,7 +315,7 @@ async function observeNaturalEnd(da, db, silenceAt) {
  * verifyEndQuiescence 结束收口验收（A3）：对局结束服务端已就绪的语义是——
  *   ① 已结束对局的迟到帧 op（含心跳 Ping）一律回 BATTLE_ENDED（409）；
  *   ② 结算结果可能重复投递（结算关闭前有界重投 2 次 + 重连补投最多 5 次）。
- * 故客户端必须：收到结束通知即**停止发送**（帧输入 / SyncFrames / 心跳），且结束回调**恰一次**。
+ * 故客户端必须：收到结束通知即**停止发送**（发帧 / 补帧 / 心跳），且结束回调**恰一次**。
  * 判据全部取自线上字节与回调计数：结束后窗口内的新增上发帧数、结束回调累计次数、会话终态。
  */
 async function verifyEndQuiescence(da, db, windowMs = 2_500) {
@@ -342,11 +354,11 @@ async function verifyEndQuiescence(da, db, windowMs = 2_500) {
 
 /** measureSilence 统计静默窗口内的线上帧计数与「距最后一次输入 ≥ 阈值」后的帧广播数。 */
 function measureSilence(da, silenceAt) {
-  const inputs = da.rec.sent.filter((f) => f.op === BattleOps.sendFrameInput);
+  const inputs = da.rec.sent.filter((f) => f.op === OP_SEND_FRAME_INPUT);
   const lastInputAt = inputs.length > 0 ? inputs[inputs.length - 1].t : silenceAt;
   return {
-    pings: da.rec.count(BattleOps.ping, silenceAt),
-    inputs: da.rec.count(BattleOps.sendFrameInput, silenceAt),
+    pings: da.rec.count(OP_PING, silenceAt),
+    inputs: da.rec.count(OP_SEND_FRAME_INPUT, silenceAt),
     afterThreshold: da.stats.frames.filter((t) => t - lastInputAt >= IDLE_MS).length,
   };
 }
@@ -369,7 +381,7 @@ async function keepaliveOnce(tag) {
   const actualWindow = Date.now() - silenceAt;
   const { pings, inputs, afterThreshold } = measureSilence(da, silenceAt);
   log(
-    `[保活] 静默 ${(actualWindow / 1000).toFixed(1)}s 内只发心跳：A 发出 Ping=${pings} 条、SendFrameInput=${inputs} 条；` +
+    `[保活] 静默 ${(actualWindow / 1000).toFixed(1)}s 内只发心跳：A 发出 Ping=${pings} 条、发帧=${inputs} 条；` +
       `距最后一次输入 ≥${IDLE_MS}ms 后仍收到帧广播 ${afterThreshold} 条；A 状态=${da.session.state()}`,
   );
   const resumed = await resumeAfterSilence(da, silenceAt);

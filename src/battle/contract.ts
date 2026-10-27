@@ -5,7 +5,6 @@ import { MAX_BODY_SIZE } from '../frame/constants.js';
 import type { InvokeOption } from '../client/options.js';
 import { defaultSerializer, type Serializer } from '../client/serializer.js';
 import type { WebSocketFactory } from '../transport/ws.js';
-import { DEFAULT_BATTLE_OPS, type BattleOpSet } from './ops.js';
 import type { BattleSessionStats } from './stats.js';
 
 /** DEFAULT_HEARTBEAT_MS 直连保活心跳缺省周期（ms）：严格小于 battle 侧空闲读超时
@@ -27,6 +26,23 @@ export const DEFAULT_DRAIN_MS = 2_000;
  *  此时**没有结算可展示**（上层不该去取结算数据）。 */
 export type BattleSessionState = 'connecting' | 'connected' | 'reconnecting' | 'ended' | 'failed' | 'closed';
 
+/** ProbeSpec 保活探针（心跳）：op 与载荷由调用方用游戏协议包构造，SDK 只按时发送、
+ *  按拒绝分类处置。**未配置即不发任何字节**——不裸发现空载荷探针（服务端会按目标一致性拒绝）。 */
+export interface ProbeSpec {
+  /** 探针 op（Tell 语义，服务端不回业务回执；SDK 等帧引擎必回的空信封以捞出可判定失败）。 */
+  readonly op: string;
+  /** 探针请求载荷（按本会话的序列化器编码；每拍复用同一份，缺省为空载荷）。 */
+  readonly req?: unknown;
+}
+
+/** ReplayStep 重连后要重放的一步（通常是「入局」与「按 last_seen_frame 补帧」）。 */
+export interface ReplayStep {
+  /** 重放请求的 op 名（协议寻址键，取值见 opkeys.ts 的 OP_* 常量）。 */
+  readonly op: string;
+  /** 按当前补帧基准生成请求载荷（游戏侧用协议包构造；缺省表示空载荷）。 */
+  readonly req?: (lastSeenFrame: number) => unknown;
+}
+
 /** BattleSessionOptions 直连会话配置（全部可选，缺省即生产默认值）。 */
 export interface BattleSessionOptions {
   /** 升级路径（默认 '/'，对齐 battle 帧面 WS 服务端默认挂载路径；接入层原样转发升级请求）。 */
@@ -41,8 +57,10 @@ export interface BattleSessionOptions {
   maxBodySize?: number;
   /** 载荷序列化插槽（默认 JSON/protojson，ver=1）。 */
   serializer?: Serializer;
-  /** 打开后自动 JoinBattle（默认 true）。 */
-  autoJoin?: boolean;
+  /** 保活探针（缺省不配置 = 心跳循环不启动、零写出）：内容由游戏协议包构造。 */
+  probe?: ProbeSpec;
+  /** 重连后的重放步骤（缺省空 = 重连不重放任何业务 op）：入局/补帧的载荷由这一步生成。 */
+  replay?: readonly ReplayStep[];
   /** 意外断线自动退避重连（默认 true）。 */
   autoReconnect?: boolean;
   /** 重连窗口（默认 15s，对齐 battle 侧 offline_timeout 默认值）：窗口内退避重试，
@@ -62,8 +80,6 @@ export interface BattleSessionOptions {
    *  收到结束通知/ BATTLE_ENDED 后**立刻停发**（业务帧 + 心跳），但连接保留本窗口以读完
    *  服务端在关闭前重投/补齐的结果推送；窗口到点（或服务端先关）即释放。 */
   drainMs?: number;
-  /** 战斗 op / 推送 op 名覆盖（默认 battle.v1 契约，见 ops.ts）。 */
-  ops?: Partial<BattleOpSet>;
   /** 帧广播回调（原始载荷 + 帧头载荷编码版本）：**ver=2 需自行解码**——载荷是 protobuf
    *  二进制，由游戏侧生成包按 `version` 解码，SDK 只交字节与版本、不预解。 */
   onFrame?: (payload: Uint8Array, version: number) => void;
@@ -75,14 +91,14 @@ export interface BattleSessionOptions {
   /** 任意战斗域推送回调（op 原样透传；帧广播/结束也会走这里）。payload 与 version 同样
    *  **原样透传**：ver=2 的二进制需调用方自行解码。 */
   onPush?: (op: string, payload: Uint8Array, version: number) => void;
-  /** 重连成功回调（重新 JoinBattle + SyncFrames 补帧之后）。 */
+  /** 重连成功回调（重新升级并按 `replay` 重放之后）。 */
   onReconnected?: () => void | Promise<void>;
   /** 会话失败回调（自动重连窗口用尽 / 协议致命）。 */
   onFailed?: (err: unknown) => void;
-  /** 帧号提取钩子（重连时 SyncFrames(last_seen_frame) 用）：**ver=1 恒走内建**（protojson
-   *  的 `frame.frameId`，注入也不接管——ver=1 是调试开关，可读格式语义不变）；**ver≠1**
-   *  （如 ver=2 二进制）非自描述，才调用本钩子。返回帧号；**取不到返回 null**——不推进
-   *  补帧基准、也不报错（与 Go 的 FrameNumberFunc 同口径）。未注入时 ver=2 一律不推进。 */
+  /** 帧号提取钩子（重连补帧的 last_seen_frame 基准）：**所有载荷编码都只认本钩子**——
+   *  帧广播的字段布局属游戏协议，SDK 不持类型、不猜编码。返回帧号；**取不到返回 null**
+   *  ——不推进补帧基准、也不报错（与 Go 的 FrameNumberFunc 同口径）。未注入时一律不推进
+   *  （`lastSeenFrame()` 恒 0，补帧退化为全量）。 */
   frameNumberOf?: (payload: Uint8Array, version: number) => number | null;
 }
 
@@ -90,29 +106,27 @@ export interface BattleSessionOptions {
 export interface BattleSession {
   /** 对局 ID（成局推送的信息字段）。 */
   readonly matchId: string;
-  /** 战斗 ID（JoinBattle/SyncFrames 的客体寻址字段）。 */
+  /** 战斗 ID（入局/补帧请求的客体寻址字段；消息类型属游戏协议包）。 */
   readonly battleId: string;
   /** 实际拨号的接入层 WS 面地址（host:port，只来自本局推送）。 */
   readonly address: string;
   /** 当前状态（'ended' 为终态：心跳与业务发帧已停，连接在收尾窗口到点后释放）。 */
   state(): BattleSessionState;
+  /** 发一条业务 op 并等回执：op 与载荷由调用方给出（通常来自游戏协议包的生成 DTO 与
+   *  op 常量），SDK 只做编码、写线、匹配回执与错误归一，**不持有任何游戏域消息类型**。
+   *  未就绪（未建连/重连恢复中/已关闭）即报错，不排队；业务拒绝抛 BusinessError。 */
+  invoke(op: string, req?: unknown, ...opts: InvokeOption[]): Promise<unknown>;
   /** ended 对局是否已结束（终态判定）：收到结束通知或 BATTLE_ENDED 业务拒绝后**永久为真**
    *  ——即便之后 close()（state 转 'closed'）或连接被回收，也能判定「这一局是打完了」。
-   *  为真时一切上发（帧输入 / SyncFrames / JoinBattle / 心跳 / 重连）都被本地以
-   *  BATTLE_ENDED 拒绝，不写线。**语义分界**：ended ⇒ 有结算可展示；无结算的终态拒绝
+   *  为真时一切上发（invoke 的业务 op / 心跳 / 重连）都被本地以 BATTLE_ENDED 拒绝，
+   *  不写线。**语义分界**：ended ⇒ 有结算可展示；无结算的终态拒绝
    *  （对局不存在/已满/目标不一致）走 state()='failed' + onFailed，ended() 保持 false。 */
   ended(): boolean;
   /** 已见帧号（帧广播自动推进；重连补帧的 last_seen_frame）。 */
   lastSeenFrame(): number;
   /** 上报已见帧号（调用方自解帧广播载荷时用；只前进不后退）。 */
   noteFrame(frameId: number): void;
-  /** 入局（默认请求体 {battleId}；成功后标记为已入局，重连会自动重放）。 */
-  joinBattle(req?: unknown, ...opts: InvokeOption[]): Promise<unknown>;
-  /** 上行帧输入（默认补 battleId）。 */
-  sendFrameInput(req?: unknown, ...opts: InvokeOption[]): Promise<unknown>;
-  /** 补帧：按 last_seen_frame 拉缺失帧（缺省用本会话记录的已见帧号）。 */
-  syncFrames(lastSeenFrame?: number, ...opts: InvokeOption[]): Promise<unknown>;
-  /** 重新升级（票仍在 TTL 内）+ 重新 JoinBattle/SyncFrames；已连接时幂等。 */
+  /** 重新升级（票仍在 TTL 内）+ 按 `replay` 配置的步骤重放；已连接时幂等。 */
   reconnect(): Promise<void>;
   /** 关闭会话（幂等；不再重连）。 */
   close(): Promise<void>;
@@ -130,14 +144,14 @@ export interface Settings {
   invokeTimeoutMs: number;
   maxBodySize: number;
   serializer: Serializer;
-  autoJoin: boolean;
+  probe: ProbeSpec | undefined;
+  replay: readonly ReplayStep[];
   autoReconnect: boolean;
   reconnectWindowMs: number;
   backoffBaseMs: number;
   backoffMaxMs: number;
   heartbeatMs: number;
   drainMs: number;
-  ops: BattleOpSet;
   onFrame: BattleSessionOptions['onFrame'];
   onBattleEnd: BattleSessionOptions['onBattleEnd'];
   onPush: BattleSessionOptions['onPush'];
@@ -147,7 +161,7 @@ export interface Settings {
   frameNumberOf: BattleSessionOptions['frameNumberOf'];
 }
 
-/** resolveSettings 应用默认值（op 名默认 battle.v1 契约，可整体覆盖单项）。 */
+/** resolveSettings 应用默认值（探针/重放缺省不配置：不内建任何游戏域消息）。 */
 export function resolveSettings(opts: BattleSessionOptions): Settings {
   return {
     path: opts.path ?? '/',
@@ -156,14 +170,14 @@ export function resolveSettings(opts: BattleSessionOptions): Settings {
     invokeTimeoutMs: opts.invokeTimeoutMs ?? 10_000,
     maxBodySize: opts.maxBodySize ?? MAX_BODY_SIZE,
     serializer: opts.serializer ?? defaultSerializer,
-    autoJoin: opts.autoJoin ?? true,
+    probe: opts.probe,
+    replay: opts.replay ?? [],
     autoReconnect: opts.autoReconnect ?? true,
     reconnectWindowMs: opts.reconnectWindowMs ?? 15_000,
     backoffBaseMs: opts.backoffBaseMs ?? 500,
     backoffMaxMs: opts.backoffMaxMs ?? 30_000,
     heartbeatMs: opts.heartbeatMs ?? DEFAULT_HEARTBEAT_MS,
     drainMs: opts.drainMs ?? DEFAULT_DRAIN_MS,
-    ops: { ...DEFAULT_BATTLE_OPS, ...(opts.ops ?? {}) },
     onFrame: opts.onFrame,
     onBattleEnd: opts.onBattleEnd,
     onPush: opts.onPush,

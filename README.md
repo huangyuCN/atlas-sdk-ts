@@ -127,7 +127,7 @@ socket.on('data', (chunk: Uint8Array) => {
 | 链路 | 承载 | 入口 | 身份凭据 |
 |------|------|------|---------|
 | 业务通道 | 会话/匹配等 op（请求-响应） | 网关（`newWSClient(gateway)`） | 会话令牌（登录后） |
-| 战斗帧直连 | `JoinBattle` / `SendFrameInput` / `SyncFrames` / 帧广播 / 结算推送 | **接入层**（地址来自本局推送） | 本局 `battle_ticket` |
+| 战斗帧直连 | 入局/发帧/补帧等业务 op（op 与载荷由游戏协议包提供）+ 帧广播 / 结算推送 | **接入层**（地址来自本局推送） | 本局 `battle_ticket` |
 
 口径要点（与 Go / C# SDK 一致）：
 
@@ -141,28 +141,40 @@ socket.on('data', (chunk: Uint8Array) => {
 - **零 protobuf 运行时依赖**：推送与回执按帧头 `version` 分派（1 = protojson、2 = 二进制）；
   直连路径不需要 DTO 也能跑通（需要结构化字段时再用生成 DTO）。
 - **版本透传与放行**：帧广播 / 结束 / 任意推送回调一律拿到 `(payload, version)`——SDK 只交
-  **字节与版本**，ver=2 的解码由游戏侧生成包负责。补帧基准的帧号：ver=1 **恒走内建**
-  （`frame.frameId`，注入钩子也不接管），ver≠1 才走 `frameNumberOf` 钩子（返回帧号，取不到
-  返回 `null`）；**未注入时 ver=2 不推进也不报错**（二进制非自描述，不猜编码）。出站版本由
-  `serializer` 推导（缺省 ver=1），响应帧版本只接受白名单 `{1,2}` 且必须与会话一致，
-  未知版本是明确的协议级错误。
-- **保活**：`heartbeatMs`（缺省 2000ms）周期发 `Ping`（Tell，无回执）；心跳失败只上报，
-  绝不终止会话。
+  **字节与版本**，解码由游戏侧协议包负责。补帧基准的帧号**只认 `frameNumberOf` 钩子**
+  （对**所有**载荷编码生效，返回帧号，取不到返回 `null`）；**未注入时一律不推进也不报错**
+  （帧广播字段属游戏协议，SDK 不持类型、不猜编码）。出站版本由 `serializer` 推导
+  （缺省 ver=1），响应帧版本只接受白名单 `{1,2}` 且必须与会话一致，未知版本是明确的
+  协议级错误。
+- **保活**：`heartbeatMs`（缺省 2000ms）+ `probe`（探针 op 与载荷，由游戏协议包构造）。
+  **未配置 `probe` 则不发心跳**（一个字节都不写）；心跳失败只上报，绝不终止会话。
 
 ### 直连示例
 
 ```ts
 import {
+  OP_JOIN_BATTLE, OP_PING, OP_SEND_FRAME_INPUT, OP_SYNC_FRAMES,
   openBattleSession, parseDirectPlan, isBattleTerminalReject, isBattleTicketRejected,
 } from '@huangyucn/atlas-sdk-ts';
 
-// ① 业务链路（网关）：入队匹配 → 等成局推送（推送 op = 消息完整名）
+// 游戏域消息由游戏协议包提供（本仓不依赖它）：下面用本地结构体示意线上载荷，
+// 真实项目直接用协议包生成的 DTO 与 op 常量。
+const joinReq = (battleId: string) => ({ battleId });
+const pingReq = joinReq;
+const inputReq = (battleId: string, frameId: string) => ({ battleId, input: { frameId } });
+const syncReq = (battleId: string, lastSeenFrame: number) => ({ battleId, lastSeenFrame: String(lastSeenFrame) });
+
 client.on('/game.v1.MatchStartedNotify', (_op, payload) => {
   void openBattleSession(parseDirectPlan(payload), {
-    heartbeatMs: 2000,                                   // 保活（显式 0 关闭）
+    heartbeatMs: 2000,                           // 保活周期（显式 0 关闭）
+    probe: { op: OP_PING, req: pingReq('b-1') }, // 探针：op 与载荷由调用方给（不配则零写出）
+    replay: [                                    // 重连重放：入局 + 按 lastSeenFrame 补帧
+      { op: OP_JOIN_BATTLE, req: () => joinReq('b-1') },
+      { op: OP_SYNC_FRAMES, req: (lastSeen) => syncReq('b-1', lastSeen) },
+    ],
     onFrame: (payload, version) => { /* 帧广播：1 为 protojson、2 为二进制，按版本自行解码 */ },
-    // 帧号钩子：ver=1 恒走内建（注入也不接管）；ver≠1 才调用，取不到返回 null（不推进、不报错）
-    frameNumberOf: (payload, _version) => /* 用游戏侧生成包取帧号 */ null,
+    // 帧号钩子：所有版本都只认它（未注入则不推进补帧基准）
+    frameNumberOf: (payload, _version) => /* 用协议包取帧号 */ null,
     onBattleEnd: (payload) => { /* 结算结果：同一局恰一次（重复投递已幂等） */ },
     onFailed: (err) => {
       // 不可重试终止（含终态族业务拒绝：对局不存在/已满/目标不一致）→ 回匹配链路
@@ -173,10 +185,10 @@ client.on('/game.v1.MatchStartedNotify', (_op, payload) => {
       if (isBattleTicketRejected(err)) { /* 需回业务链路重新取票（自动重取票由上层做） */ }
     },
   }).then(async (s) => {
-    await s.joinBattle();                                  // 显式入局（缺省 autoJoin 已在建连内完成；可取回 currentFrame）
-    await s.sendFrameInput({ input: { frameId: '1' } });    // 上行帧输入
-    await s.syncFrames();                                  // 补帧（按 lastSeenFrame）
-    console.log(s.stats());                                // 重连/握手/心跳失败只读统计
+    await s.invoke(OP_JOIN_BATTLE, joinReq('b-1'));             // 显式入局（取回 currentFrame）
+    await s.invoke(OP_SEND_FRAME_INPUT, inputReq('b-1', '1'));  // 上行帧输入（载荷原样上发）
+    await s.invoke(OP_SYNC_FRAMES, syncReq('b-1', s.lastSeenFrame())); // 补帧（按 lastSeenFrame）
+    console.log(s.stats());                                     // 重连/握手/心跳失败只读统计
   });
 });
 ```
@@ -229,8 +241,10 @@ client.on('/game.v1.MatchStartedNotify', (_op, payload) => {
 bash scripts/gen-dto.sh   # 帧常量取自框架仓（ATLAS_DIR），会话 stub 取自模板仓生成物
 ```
 
-产物按 proto 包分目录（如 `gateway/v1/`、`battle/v1/`），以相对导入使用，
-生成物为纯 interface + 判空/64 位整数辅助（64 位整数线上为字符串）。
+产物按 proto 包分目录（如 `gateway/v1/`），以相对导入使用，生成物为纯 interface +
+判空/64 位整数辅助（64 位整数线上为字符串）。游戏域消息（battle / game / matcher）不在本仓
+生成：它们由游戏自己的协议包提供，SDK 不依赖、不 import（边界守卫见
+`test/gameDomainGuard.test.ts`）。
 
 会话状态机（登录/恢复/心跳/被踢）不引用任何会话消息类型，只依赖**会话协议接缝**
 `SessionProtocol`（5 个 op + 取 token/playerID/过期时间 + 被挤下线推送识别与原因提取）；
@@ -250,7 +264,7 @@ await session.login({ playerId, password });   // 自动带 client_version（见
 
 ```bash
 pnpm install    # 安装依赖（pnpm ≥ 10）
-pnpm test       # 单测 + golden vectors 对拍（24 用例，与 Go SDK 同一份向量）
+pnpm test       # 单测 + golden vectors 对拍（26 个测试文件 / 281 例，向量与 Go SDK 同一份）
 pnpm typecheck  # tsc --noEmit（strict）
 pnpm build      # tsup → dist/（ESM + CJS + d.ts）
 pnpm bench      # 协议层 benchmark

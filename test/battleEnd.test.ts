@@ -1,7 +1,7 @@
 // 对局结束语义收口（跨机验收暴露的三件事）：**终态停发 / 补投幂等 / 收尾窗口**。
 //
 // 服务端已就绪的语义（battle 帧面，见 atlas-game-layout services/battle/internal/{server,stream}）：
-//   1. 已结束的对局对**任何**迟到帧 op（含 Ping、JoinBattle、SendFrameInput、SyncFrames）
+//   1. 已结束的对局对**任何**迟到帧 op（含探针、入局、发帧、补帧）
 //      一律以稳定 reason **BATTLE_ENDED**（409）拒绝——与 BATTLE_TICKET_INVALID/EXPIRED 互斥
 //      （identity.Resolve 在「投递之前」判 Ended，免得 SpawnAuto 重建空名单实例）；
 //   2. 结算结果**可能重复投递**：结算关闭前对每条未确认连接重投 EndRetries=2 次
@@ -17,7 +17,16 @@ import { describe, expect, it, vi } from 'vitest';
 import { waitFor } from './helpers.js';
 import { MockBattleServer, jsonBytes, makeBattleFactory } from './battleMock.js';
 import {
-  BattleOps,
+  STUB_OP_INPUT,
+  STUB_OP_JOIN,
+  STUB_OP_PING,
+  STUB_OP_SYNC,
+  battleDefaults,
+  join,
+  sendFrameInput,
+  syncFrames,
+} from './battleStub.js';
+import {
   BusinessError,
   LOCAL_SETTLED_KEY,
   isBattleEnded,
@@ -47,14 +56,14 @@ function planOf(address = '10.0.0.9:7100') {
 /** 默认服务端行为：JoinBattle 回成功回执（其余 op 回空成功）。 */
 function joinOK(srv: MockBattleServer): void {
   srv.onRequest((req, s) => {
-    if (req.op === BattleOps.joinBattle) s.replyOK(jsonBytes({ currentFrame: '3' }));
+    if (req.op === STUB_OP_JOIN) s.replyOK(jsonBytes({ currentFrame: '3' }));
     else s.replyOK();
   });
 }
 
-/** 带 mock WS 工厂打开一条直连会话（各用例统一入口）。 */
+/** 带 mock WS 工厂打开一条直连会话（各用例统一入口）：探针/重放/帧号钩子由测试侧替身给出。 */
 function open(factory: WebSocketFactory, opts: BattleSessionOptions = {}): Promise<BattleSession> {
-  return openBattleSession(planOf(), { wsFactory: factory, ...opts });
+  return openBattleSession(planOf(), { ...battleDefaults('b-9'), wsFactory: factory, ...opts });
 }
 
 /** sleep 真定时器等待（假定时器用例不用它）。 */
@@ -74,13 +83,13 @@ describe('BATTLE_ENDED：终态与停发', () => {
   it('业务调用收到 BATTLE_ENDED → 进终态：心跳停、随后零写入（假 WS 逐字节计数）', async () => {
     const h = makeBattleFactory((srv) => {
       srv.onRequest((req, s) => {
-        if (req.op === BattleOps.sendFrameInput) srv.replyStatus('BATTLE_ENDED', BATTLE_ENDED_CODE);
+        if (req.op === STUB_OP_INPUT) srv.replyStatus('BATTLE_ENDED', BATTLE_ENDED_CODE);
         else srv.replyOK();
       });
     });
     const s = await open(h.factory, { heartbeatMs: 15 });
-    await waitFor(() => h.servers[0]!.countOp(BattleOps.ping) >= 1, 2000); // 心跳确实在跑
-    const err = await s.sendFrameInput({ input: { frameId: '1' } }).catch((e: unknown) => e);
+    await waitFor(() => h.servers[0]!.countOp(STUB_OP_PING) >= 1, 2000); // 心跳确实在跑
+    const err = await sendFrameInput(s, 'b-9', 1).catch((e: unknown) => e);
     expect(isBattleEnded(err)).toBe(true); // 服务端拒绝原样上抛（可判定）
     expect(s.ended()).toBe(true);
     expect(s.state()).toBe('ended');
@@ -98,7 +107,7 @@ describe('BATTLE_ENDED：终态与停发', () => {
   it('心跳 Ping 的 BATTLE_ENDED 回执（无 pending）也进终态——不必等业务调用撞墙', async () => {
     const h = makeBattleFactory((srv) => {
       srv.onRequest((req, s) => {
-        if (req.op === BattleOps.ping) srv.replyStatus('BATTLE_ENDED', BATTLE_ENDED_CODE);
+        if (req.op === STUB_OP_PING) srv.replyStatus('BATTLE_ENDED', BATTLE_ENDED_CODE);
         else srv.replyOK();
       });
     });
@@ -108,18 +117,18 @@ describe('BATTLE_ENDED：终态与停发', () => {
     const bytesAtEnd = h.sockets[0]!.sent.length;
     await sleep(80);
     expect(h.sockets[0]!.sent.length).toBe(bytesAtEnd); // 心跳循环已停（不含在途心跳）
-    expect(h.servers[0]!.countOp(BattleOps.ping)).toBeLessThanOrEqual(2);
+    expect(h.servers[0]!.countOp(STUB_OP_PING)).toBeLessThanOrEqual(2);
     await s.close();
   });
 
   it('在途请求遇上对局结束 → 以 BATTLE_ENDED 立即结算（不静默成功、不等到超时）', async () => {
     const h = makeBattleFactory((srv) => {
       srv.onRequest((req, s) => {
-        if (req.op === BattleOps.joinBattle) srv.replyOK(jsonBytes({ currentFrame: '3' })); // 之后一律不回执
+        if (req.op === STUB_OP_JOIN) srv.replyOK(jsonBytes({ currentFrame: '3' })); // 之后一律不回执
       });
     });
     const s = await open(h.factory, { invokeTimeoutMs: 60_000 }); // 超时远大于用例时长
-    const inflight = s.sendFrameInput({ input: { frameId: '3' } });
+    const inflight = sendFrameInput(s, 'b-9', 3);
     h.servers[0]!.notify(BATTLE_END, jsonBytes({ battleId: 'b-9', winnerPlayerId: 'p-1' }));
     const err = await inflight.catch((e: unknown) => e);
     expect(isBattleEnded(err)).toBe(true); // 在途请求当场了结为终态拒绝，而不是干等超时
@@ -149,11 +158,11 @@ describe('BATTLE_ENDED：终态与停发', () => {
     const h = makeBattleFactory((srv, index) => {
       srv.onRequest((req, s) => {
         if (index === 0) {
-          if (req.op === BattleOps.joinBattle) s.replyOK(jsonBytes({ currentFrame: '3' }));
+          if (req.op === STUB_OP_JOIN) s.replyOK(jsonBytes({ currentFrame: '3' }));
           else s.replyOK();
           return;
         }
-        if (req.op === BattleOps.joinBattle) s.replyStatus('BATTLE_ENDED', BATTLE_ENDED_CODE); // 新一代入局被拒
+        if (req.op === STUB_OP_JOIN) s.replyStatus('BATTLE_ENDED', BATTLE_ENDED_CODE); // 新一代入局被拒
         else s.replyOK();
       });
     });
@@ -181,9 +190,9 @@ describe('BATTLE_ENDED：终态与停发', () => {
     await waitFor(() => s.ended());
     const bytesAtEnd = h.sockets[0]!.sent.length;
     const probes: Probe[] = [
-      ['sendFrameInput', () => s.sendFrameInput({ input: { frameId: '2' } })],
-      ['syncFrames', () => s.syncFrames(1)],
-      ['joinBattle', () => s.joinBattle()],
+      ['sendFrameInput', () => sendFrameInput(s, 'b-9', 2)],
+      ['syncFrames', () => syncFrames(s, 'b-9', 1)],
+      ['joinBattle', () => join(s, 'b-9')],
       ['reconnect', () => s.reconnect()],
     ];
     for (const [name, call] of probes) {
@@ -198,12 +207,12 @@ describe('BATTLE_ENDED：终态与停发', () => {
   it('③ 终态时在途请求以终态 Status 本地结算（reason/code/class 对齐，metadata 标本地结算）', async () => {
     const h = makeBattleFactory((srv) => {
       srv.onRequest((req, s) => {
-        if (req.op === BattleOps.joinBattle) srv.replyOK(jsonBytes({ currentFrame: '3' })); // 其余不回执
+        if (req.op === STUB_OP_JOIN) srv.replyOK(jsonBytes({ currentFrame: '3' })); // 其余不回执
       });
     });
     const s = await open(h.factory, { invokeTimeoutMs: 60_000, heartbeatMs: 0 }); // 超时远大于用例时长
-    const first = s.sendFrameInput({ input: { frameId: '1' } }).catch((e: unknown) => e);
-    const second = s.sendFrameInput({ input: { frameId: '2' } }).catch((e: unknown) => e);
+    const first = sendFrameInput(s, 'b-9', 1).catch((e: unknown) => e);
+    const second = sendFrameInput(s, 'b-9', 2).catch((e: unknown) => e);
     h.servers[0]!.notify(BATTLE_END, jsonBytes({ battleId: 'b-9', winnerPlayerId: 'p-1' }));
     for (const err of await Promise.all([first, second])) {
       expect(err).toBeInstanceOf(BusinessError); // 不报成网络错误、不等超时
@@ -260,14 +269,14 @@ describe('结算通知补投的幂等', () => {
   it('BATTLE_ENDED 拒绝先到、结束通知后到（补投）→ 结束通知仍回调一次', async () => {
     const h = makeBattleFactory((srv) => {
       srv.onRequest((req, s) => {
-        if (req.op === BattleOps.syncFrames) srv.replyStatus('BATTLE_ENDED', BATTLE_ENDED_CODE);
+        if (req.op === STUB_OP_SYNC) srv.replyStatus('BATTLE_ENDED', BATTLE_ENDED_CODE);
         else srv.replyOK();
       });
     });
     const end: string[] = [];
     const s = await open(h.factory, { onBattleEnd: (payload) => void end.push(new TextDecoder().decode(payload)) });
     // 先由业务拒绝置终态（此时还没有结算载荷）。
-    await expect(s.syncFrames(1)).rejects.toSatisfy((e: unknown) => isBattleEnded(e));
+    await expect(syncFrames(s, 'b-9', 1)).rejects.toSatisfy((e: unknown) => isBattleEnded(e));
     expect(s.ended()).toBe(true);
     expect(end.length).toBe(0);
     // 服务端的留档补投随后到达：结算结果不能因为「先撞了拒绝」而丢失。
