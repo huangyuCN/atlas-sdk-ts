@@ -6,7 +6,7 @@ import type { GenEnum, GenFile, GenMessage, GenService } from "@bufbuild/protobu
 import type { Message } from "@bufbuild/protobuf";
 import type { FrameInputs, LockstepFrame, LockstepInput, SessionMeta, SnapshotMeta } from "../../lockstep/lockstep_pb.js";
 import type { EmptySchema } from "@bufbuild/protobuf/wkt";
-import type { CreateBattleReplySchema, CreateBattleRequestSchema, GetStateReplySchema, GetStateReqSchema } from "./battle_pb.js";
+import type { AdmitBattleReqSchema, CreateBattleReplySchema, CreateBattleRequestSchema, GetStateReplySchema, GetStateReqSchema } from "./battle_pb.js";
 
 /**
  * Describes the file api/battle/v1/battle_service.proto.
@@ -396,6 +396,14 @@ export declare const BattleService: GenService<{
     methodKind: "unary";
     input: typeof CreateBattleRequestSchema;
     output: typeof CreateBattleReplySchema;
+  },
+  /**
+   * @generated from rpc battle.v1.BattleService.Admit
+   */
+  admit: {
+    methodKind: "unary";
+    input: typeof AdmitBattleReqSchema;
+    output: typeof IssueEntryTicketReplySchema;
   },
   /**
    * @generated from rpc battle.v1.BattleService.GetState

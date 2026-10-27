@@ -53,6 +53,32 @@ export declare type CreateBattleReply = Message<"battle.v1.CreateBattleReply"> &
 export declare const CreateBattleReplySchema: GenMessage<CreateBattleReply>;
 
 /**
+ * @generated from message battle.v1.AdmitBattleReq
+ */
+export declare type AdmitBattleReq = Message<"battle.v1.AdmitBattleReq"> & {
+  /**
+   * @generated from field: string match_id = 1;
+   */
+  matchId: string;
+
+  /**
+   * @generated from field: repeated string player_ids = 2;
+   */
+  playerIds: string[];
+
+  /**
+   * @generated from field: string battle_id = 3;
+   */
+  battleId: string;
+};
+
+/**
+ * Describes the message battle.v1.AdmitBattleReq.
+ * Use `create(AdmitBattleReqSchema)` to create a new message.
+ */
+export declare const AdmitBattleReqSchema: GenMessage<AdmitBattleReq>;
+
+/**
  * @generated from message battle.v1.GetBattleRequest
  */
 export declare type GetBattleRequest = Message<"battle.v1.GetBattleRequest"> & {
