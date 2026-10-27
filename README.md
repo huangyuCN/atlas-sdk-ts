@@ -175,7 +175,7 @@ client.on('/game.v1.MatchStartedNotify', (_op, payload) => {
     onFrame: (payload, version) => { /* 帧广播：1 为 protojson、2 为二进制，按版本自行解码 */ },
     // 帧号钩子：所有版本都只认它（未注入则不推进补帧基准）
     frameNumberOf: (payload, _version) => /* 用协议包取帧号 */ null,
-    onBattleEnd: (payload) => { /* 结算结果：同一局恰一次（重复投递已幂等） */ },
+    onBattleEnd: (payload) => { /* 结算结果：同一局恰一次（重复投递已幂等；空载荷不触发） */ },
     onFailed: (err) => {
       // 不可重试终止（含终态族业务拒绝：对局不存在/已满/目标不一致）→ 回匹配链路
       if (isBattleTerminalReject(err)) { /* 终态族：这一局已无用，不重连 */ }

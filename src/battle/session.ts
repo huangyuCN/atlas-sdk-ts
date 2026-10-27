@@ -140,7 +140,7 @@ class DirectBattleSession implements BattleSession {
       takeHeartbeat: (seq) => this.heartbeats.delete(seq),
       onHeartbeatRejected: (status) => this.terminal.onHeartbeatRejected(status),
       onTerminalReject: (status) => this.terminal.reject(status),
-      absorbEnd: () => this.ending.absorb(),
+      absorbEnd: (payload) => this.ending.absorb(payload),
       onFrame: this.settings.onFrame,
       onBattleEnd: this.settings.onBattleEnd,
       onPush: this.settings.onPush,

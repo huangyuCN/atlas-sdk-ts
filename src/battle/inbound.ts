@@ -2,8 +2,8 @@
 //
 // 会话把「查表结算 / 终态收口 / 心跳记账 / 结束通知收口」以钩子注入，本模块只管帧语义：
 //   - Response：版本校验 → 包络解码 →（心跳回执记账｜终态收口）→ 按 seq 结算；
-//   - Notify：op 分发（帧广播推进补帧基准 + onFrame；结束通知首份为准 + onBattleEnd；
-//     其余 op 透传 onPush）——坏帧与回调异常都不影响读循环；
+//   - Notify：op 分发（帧广播推进补帧基准 + onFrame；结束通知首份为准 + onBattleEnd，
+//     空载荷直接丢弃；其余 op 透传 onPush）——坏帧与回调异常都不影响读循环；
 //   - 其余帧类型：协议致命（交会话终止本代连接）。
 //
 // 关键顺序（评审 R3-P1）：**终态判定必须在结算之前**——心跳回执没有 pending，若先走
@@ -16,6 +16,7 @@ import { parseRequestBody } from '../frame/body.js';
 import { decodeReply } from '../frame/reply.js';
 import type { Status } from '../frame/status.js';
 import { OP_BATTLE_END_NOTIFY, OP_FRAME_BROADCAST } from './opkeys.js';
+import type { EndNotifyDisposition } from './ending.js';
 import { isSupportedPayloadVersion } from './wire.js';
 
 /** InboundHooks 收帧面与会话的接缝（会话注入；本模块不持有会话状态）。 */
@@ -32,8 +33,9 @@ export interface InboundHooks {
   onHeartbeatRejected(status: Status): void;
   /** onTerminalReject 业务拒绝的终态收口（BATTLE_ENDED 交结束收口，其余终态族置终态）。 */
   onTerminalReject(status: Status): void;
-  /** absorbEnd 吸收一条结束通知：返回 true 表示首份（会话据此回调业务一次）。 */
-  absorbEnd(): boolean;
+  /** absorbEnd 吸收一条结束通知（空载荷判据在 ending.ts）：'empty' 不算结束信号
+   *  （调用方连统一出口都不进）、'first' 首份（会话据此回调业务一次）、'replay' 重复副本。 */
+  absorbEnd(payload: Uint8Array): EndNotifyDisposition;
   /** 帧广播回调（原始载荷 + 载荷编码版本）。 */
   onFrame?: ((payload: Uint8Array, version: number) => void) | undefined;
   /** 结束通知回调（首份；原始载荷 + 版本）。 */
@@ -124,14 +126,18 @@ export class BattleInbound {
 
   /** dispatch 按 op 分发推送（回调异常隔离：不影响读循环）。
    *  帧号先于 onFrame 推进（回调抛异常也不丢补帧进度）；结束通知按「首份为准」收口
-   *  （服务端有界重投 + 重连补投都会重复到达，业务回调必须恰一次）。 */
+   *  （服务端有界重投 + 重连补投都会重复到达，业务回调必须恰一次），其中**空载荷一律丢弃**：
+   *  不进终态、不回调、也不经统一出口分发（跨 SDK 统一契约——Go 的 noteEndNotify 与 C# 的
+   *  NoteEndNotify 都以载荷长度为零提前返回，三语言必须同口径）。重复副本仍经 onPush 透传。 */
   private dispatch(op: string, payload: Uint8Array, version: number): void {
     try {
       if (op === OP_FRAME_BROADCAST) {
         this.noteFrame(this.extractFrameId(payload, version));
         this.hooks.onFrame?.(payload, version);
       } else if (op === OP_BATTLE_END_NOTIFY) {
-        if (this.hooks.absorbEnd()) this.hooks.onBattleEnd?.(payload, version);
+        const disposition = this.hooks.absorbEnd(payload);
+        if (disposition === 'empty') return; // 空载荷：连统一出口也不可见（"不分发"）
+        if (disposition === 'first') this.hooks.onBattleEnd?.(payload, version);
       }
       this.hooks.onPush?.(op, payload, version);
     } catch {

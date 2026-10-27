@@ -86,10 +86,16 @@ export interface BattleSessionOptions {
   /** 战斗结束回调（原始载荷 + 版本）。**同一局只触发一次**：服务端结算关闭前的有界重投
    *  （EndRetries=2）与重连补投（每玩家最多 5 次）都会让同一份通知重复到达，重复副本不再
    *  回调（**载荷逐字一致**；若出现不一致副本，以先到者为准——结算不可改判）。重复副本仍会
-   *  经 onPush 透传，需要逐份留档/上报的调用方请在那条通道上做。 */
+   *  经 onPush 透传，需要逐份留档/上报的调用方请在那条通道上做。
+   *
+   *  **空载荷不触发**（也不进终态、不经 onPush 分发）：零字节的结束通知**不构成结束信号**
+   *  ——这是跨 SDK 统一契约（Go `direct/ended.go` 的 `noteEndNotify`、C# `NoteEndNotify`
+   *  都以载荷长度为零提前返回，三语言必须同口径）。空载荷同样不占用「首投」名额：随后
+   *  到达的非空首投照常进终态并回调一次，不会被当补投副本丢弃。 */
   onBattleEnd?: (payload: Uint8Array, version: number) => void;
   /** 任意战斗域推送回调（op 原样透传；帧广播/结束也会走这里）。payload 与 version 同样
-   *  **原样透传**：ver=2 的二进制需调用方自行解码。 */
+   *  **原样透传**：ver=2 的二进制需调用方自行解码。唯一的例外是**结束通知的空载荷**：
+   *  它不算结束信号，连这里也不会被分发（与 Go/C# 同口径，见 onBattleEnd）。 */
   onPush?: (op: string, payload: Uint8Array, version: number) => void;
   /** 重连成功回调（重新升级并按 `replay` 重放之后）。 */
   onReconnected?: () => void | Promise<void>;

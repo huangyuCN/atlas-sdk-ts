@@ -145,7 +145,7 @@ describe('响应帧载荷编码版本（ver）白名单', () => {
       takeHeartbeat: () => false,
       onHeartbeatRejected: () => {},
       onTerminalReject: () => {},
-      absorbEnd: () => false,
+      absorbEnd: () => 'empty',
     };
     const inbound = new BattleInbound(hooks);
     // 直接交一条 ver=3 的响应帧头：真实 WS 面会在帧层先拒（见下一个用例），

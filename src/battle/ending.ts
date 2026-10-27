@@ -16,7 +16,8 @@
 //      没有关闭事件，窗口就是兜底回收）。窗口必须**有界**且定时器**归本类独占**。
 //
 // 边界：终态不可逆（isEnded 一旦为真永久为真，close() 也不清除）；定时器一旦 dispose()
-// 便不再有任何待触发的窗口回调（无泄漏）。
+// 便不再有任何待触发的窗口回调（无泄漏）。**空载荷不构成结束信号**（跨 SDK 统一契约，
+// 见 absorb 的注释）——它既不进终态，也不占用「首投」这一名额。
 export interface EndingHooks {
   /** 收尾窗口（ms；<= 0 表示置终态即释放，不等待）。 */
   drainMs: number;
@@ -25,6 +26,10 @@ export interface EndingHooks {
   /** 收尾窗口到点：释放连接（由会话注入；须幂等）。 */
   onDrain: () => void;
 }
+
+/** EndNotifyDisposition 一条结束通知的处置：'empty' = 空载荷不算结束信号（不占用首投
+ *  名额）、'first' = 首投（进终态并回调一次）、'replay' = 重复副本（不改判、不重放回调）。 */
+export type EndNotifyDisposition = 'empty' | 'first' | 'replay';
 
 export class BattleEnding {
   private ended = false;
@@ -43,13 +48,21 @@ export class BattleEnding {
     this.mark();
   }
 
-  /** absorb 吸收一条结束通知：返回 true 表示这是**首份结算**（调用方回调一次业务）；
-   *  重复副本（无论载荷是否一致）返回 false——不改判、不回第二遍。 */
-  absorb(): boolean {
-    if (this.sealed) return false;
+  /** absorb 吸收一条结束通知：'first' = **首份结算**（调用方回调一次业务）、'replay' =
+   *  重复副本（不改判、不回第二遍）、'empty' = 空载荷（**不构成结束信号**）。
+   *
+   *  空载荷判据是**跨 SDK 统一契约**（改这里之前先看另外两份实现，三语言必须同口径）：
+   *  Go `direct/ended.go` 的 noteEndNotify 以 `len(payload) == 0` 提前返回、C#
+   *  `BattleSession.Ended.cs` 的 NoteEndNotify 以 `payload.Length == 0` 提前返回——都
+   *  **不进终态、不回调、不分发**。空载荷还必须**不占用首投名额**（不置 sealed、不启动
+   *  收尾窗口）：否则随后到达的真正结算会被当补投副本丢弃，结算永久丢失且无处取回。
+   */
+  absorb(payload: Uint8Array): EndNotifyDisposition {
+    if (payload.length === 0) return 'empty';
+    if (this.sealed) return 'replay';
     this.sealed = true;
     this.mark();
-    return true;
+    return 'first';
   }
 
   /** dispose 释放收尾窗口定时器：调用后不再有窗口回调（close / 连接已死时调用）。 */

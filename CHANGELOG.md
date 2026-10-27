@@ -41,6 +41,19 @@ lockstep），battle / game / matcher 的 DTO 与手写包装改由游戏自己�
 - 依赖边界守卫 `test/gameDomainGuard.test.ts`：游戏域生成物目录/import、手写 op 集合、
   生成脚本与 `package.json` 依赖一旦回流即红。
 
+### 修复
+
+- **行为变更：结束通知空载荷不再进终态，与 Go/C# 一致**。`/battle.v1.BattleEndNotify`
+  推送的载荷为零字节时**不构成结束信号**：不进终态（`ended()` 保持 false、状态不迁移、
+  心跳不停）、不触发 `onBattleEnd`、也不经统一出口 `onPush` 分发；且**不占用「首投」
+  名额**——随后到达的非空首投照常进终态并回调一次，不会被当补投副本丢弃。旧口径「见空
+  即进终态」会让客户端把「这一局打完了」写进不可逆状态（结算回调却只拿到零字节，此后
+  一切上发被本地以 `BATTLE_ENDED` 拒绝），且真结算到达时已被当作补投丢弃。
+  口径与 Go（`direct/ended.go` 的 `noteEndNotify`：`len(payload) == 0` 提前返回）与 C#
+  （`BattleSession.Ended.cs` 的 `NoteEndNotify`：`payload.Length == 0` 提前返回）逐条一致。
+  **非空载荷照旧**：首投回调恰一次、补投不重放回调（TS 既有的「非空补投副本仍经 `onPush`
+  透传」契约不变）。
+
 ### 文档
 
 - `scripts/gen-dto.sh` 只导契约消息（session + lockstep），头部注释写明「契约消息边界」；
