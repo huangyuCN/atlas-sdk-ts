@@ -50,6 +50,12 @@ describe('parseDirectPlan 成局通知解析', () => {
     expect(plan.endpoints.get(EdgeTransport.Udp)).toBe('10.0.0.9:7102');
   });
 
+  it('读取服务端 max_network_gap_ms：字符串/数字与两套键名都认，缺失=0', () => {
+    expect(parseDirectPlan(notifyPayload({ maxNetworkGapMs: '30000' })).maxNetworkGapMs).toBe(30000);
+    expect(parseDirectPlan(notifyPayload({ max_network_gap_ms: 30000 })).maxNetworkGapMs).toBe(30000);
+    expect(parseDirectPlan(notifyPayload()).maxNetworkGapMs).toBe(0);
+  });
+
   it('接受原始 protojson 字节与推送信封 JSON（{type,payload}）两种形态', () => {
     const raw = new TextEncoder().encode(JSON.stringify(notifyPayload()));
     expect(parseDirectPlan(raw).battleId).toBe('b-9');

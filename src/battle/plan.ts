@@ -5,7 +5,7 @@
 // 零 protobuf 运行时依赖：推送载荷是 protojson（帧头 ver=1）——直接 JSON 解码；
 //   - bytes 字段（battle_ticket）按 protojson 约定是**标准 base64（带填充）**；
 //   - 枚举字段（endpoints[].transport）按 protojson 默认下发**枚举名**（EDGE_TRANSPORT_*）；
-//   - 64 位整数字段按字符串下发（本消息无，帧号解析见 session 的推送提取）。
+//   - 64 位整数字段按字符串下发（max_network_gap_ms 按此口径读取，数字也容错；帧号解析见 session 的推送提取）。
 // 传输面只取本 SDK 支持的面：TS（浏览器）只有 WS，**缺 WS 面即明确报错**
 // （不得回退猜端口、不得静默换面——见规格 §2.1/§7）。
 import { decodeBase64Std } from '../frame/base64.js';
@@ -46,6 +46,10 @@ export interface DirectPlan {
   readonly ticket: Uint8Array;
   /** 传输面 → 接入层地址（host:port）：**本人票条目**里的实例地址优先，缺失才取回执级列表。 */
   readonly endpoints: ReadonlyMap<EdgeTransport, string>;
+  /** 服务端下发的「玩家最多断网多久还能回来」（毫秒；0 = 未下发/旧服务端）。
+   *  它同时是服务端的会话静默窗口：客户端任何自建的空闲判定都必须大于它，
+   *  否则客户端先重建、无感切网失效。 */
+  readonly maxNetworkGapMs: number;
 }
 
 /** parseDirectPlan 解析成局推送：接受原始 protojson 字节、JSON 文本或已解码对象；
@@ -66,7 +70,27 @@ export function parseDirectPlan(notify: Uint8Array | string | Record<string, unk
       `battle: 成局通知的 endpoints 缺 ${EdgeTransport.Ws} 面（TS 只有 WS 面：不猜端口、不换面）`,
     );
   }
-  return { matchId: strField(payload, 'matchId'), battleId, ticket, endpoints };
+  return {
+    matchId: strField(payload, 'matchId'),
+    battleId,
+    ticket,
+    endpoints,
+    maxNetworkGapMs: intField(payload, MAX_NETWORK_GAP_KEYS),
+  };
+}
+
+/** MAX_NETWORK_GAP_KEYS 是服务端「玩家最多断网多久还能回来」的键名（proto 名与 protojson 默认名）。 */
+const MAX_NETWORK_GAP_KEYS: readonly string[] = ['maxNetworkGapMs', 'max_network_gap_ms'];
+
+/** intField 取整数字段：protojson 的 int64 默认按**字符串**下发，也接受 JSON 数字；
+ *  缺失/非数字/负数一律按 0（= 未下发，调用方保持既有缺省，不猜）。 */
+function intField(obj: Record<string, unknown>, keys: readonly string[]): number {
+  for (const key of keys) {
+    const v = obj[key];
+    const n = typeof v === 'string' ? Number(v) : typeof v === 'number' ? v : Number.NaN;
+    if (Number.isFinite(n) && n >= 0) return Math.trunc(n);
+  }
+  return 0;
 }
 
 /** notifyObject 归一化推送载荷为字面量对象（字节/文本 → JSON；信封自动解包）。 */
