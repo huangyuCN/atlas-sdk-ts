@@ -16,6 +16,7 @@ import { MsgType, type Header } from '../frame/constants.js';
 import { parseRequestBody } from '../frame/body.js';
 import { decodeReply } from '../frame/reply.js';
 import type { Status } from '../frame/status.js';
+import type { DownlinkDecoder } from '../downlink/index.js';
 import { OP_BATTLE_END_NOTIFY, OP_FRAME_BROADCAST } from './opkeys.js';
 import type { EndNotifyDisposition } from './ending.js';
 import { isSupportedPayloadVersion } from './wire.js';
@@ -43,6 +44,9 @@ export interface InboundHooks {
   onBattleEnd?: ((payload: Uint8Array, version: number) => void) | undefined;
   /** 任意战斗域推送回调（op 原样透传）。 */
   onPush?: ((op: string, payload: Uint8Array, version: number) => void) | undefined;
+  /** downlink 下行增量解码器（ver=3）：注入后帧广播先合并、再按全量（ver=2）交付；
+   *  未注入则保持原样透传（旧行为零变化）。失步由解码器内部请求关键帧。 */
+  downlink?: DownlinkDecoder | undefined;
   /** 帧号提取钩子：**所有版本都只认本钩子**（帧广播字段属游戏协议，SDK 不持类型、
    *  不猜编码）；返回 null 表示本帧取不到帧号（不推进补帧基准、不报错——与 Go 的
    *  FrameNumberFunc 同口径）。 */
@@ -134,8 +138,18 @@ export class BattleInbound {
   private dispatch(op: string, payload: Uint8Array, version: number): void {
     try {
       if (op === OP_FRAME_BROADCAST) {
-        this.noteFrame(this.extractFrameId(payload, version));
-        this.hooks.onFrame?.(payload, version);
+        // ver=3：先按 base_seq 校验并合并，交付的是**全量**字节 + ver=2；失步/迟到返回 null
+        //（不交付、也不推进补帧基准——与 Go 的 Decoder.Apply 同口径）。
+        let full = payload;
+        let fullVer = version;
+        if (this.hooks.downlink !== undefined) {
+          const decoded = this.hooks.downlink.apply(payload, version);
+          if (decoded === null) return;
+          full = decoded.payload;
+          fullVer = decoded.version;
+        }
+        this.noteFrame(this.extractFrameId(full, fullVer));
+        this.hooks.onFrame?.(full, fullVer);
       } else if (op === OP_BATTLE_END_NOTIFY) {
         const disposition = this.hooks.absorbEnd(payload);
         if (disposition !== 'first') return; // 空载荷 / 补投：连统一出口也不可见（"不分发"）

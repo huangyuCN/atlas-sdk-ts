@@ -120,3 +120,6 @@ export type { NotifyHandler } from './client/notify.js';
 export type { WebSocketLike, WebSocketFactory } from './transport/ws.js';
 export { buildWsUrl, connectWebSocketTransport, dialWebSocket, wsDialer } from './transport/ws.js';
 export { newWSClient } from './client/wsclient.js';
+
+// 下行增量（ver=3）解码：合并 + 基线/序号校验（与模板仓 lib/downlink 同语义）。
+export * from './downlink/index.js';

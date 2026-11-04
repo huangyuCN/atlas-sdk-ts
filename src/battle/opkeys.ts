@@ -17,6 +17,8 @@ export const OP_JOIN_BATTLE = '/battle.v1.BattleService/JoinBattle';
 export const OP_SEND_FRAME_INPUT = '/battle.v1.BattleService/SendFrameInput';
 /** OP_SYNC_FRAMES 是补帧 op：载荷按 `frameNumberOf` 推进的补帧基准生成。 */
 export const OP_SYNC_FRAMES = '/battle.v1.BattleService/SyncFrames';
+/** OP_REQUEST_FRAME_KEYFRAME 是关键帧请求 op（ver=3 增量失步时的快速修复）。 */
+export const OP_REQUEST_FRAME_KEYFRAME = '/battle.v1.BattleService/RequestFrameKeyframe';
 /** OP_FRAME_BROADCAST 是帧广播推送的 op（会话据此推进补帧基准）。 */
 export const OP_FRAME_BROADCAST = '/battle.v1.FrameBroadcast';
 /** OP_BATTLE_END_NOTIFY 是战斗结束通知推送的 op（会话据此进入终态）。 */

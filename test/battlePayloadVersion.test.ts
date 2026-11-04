@@ -7,7 +7,8 @@
 //   2. 帧号钩子：**所有版本**都只认注入的钩子（内建 protojson 解析已随游戏域消息删除），
 //      未注入或钩子返回 null ⇒ 不推进补帧基准、也不报错；
 //   3. 放行 ver=2：出站版本由序列化器推导（缺省 ver=1），回执版本只接受白名单 {1,2} 且必须
-//      与会话一致，未知版本（如 3）是明确的协议级错误；
+//      与会话一致；帧头白名单已含 ver=3（下行增量广播，只走推送），故 ver=3 的回执由
+//      会话级白名单拦下（明确报错，不猜编码）；
 //   4. 缺省用法不变：缺省会话发 ver=1，一参 onFrame 回调可用，noteFrame 手动推进照旧。
 import { describe, expect, it } from 'vitest';
 import { waitFor } from './helpers.js';
@@ -164,18 +165,21 @@ describe('响应帧载荷编码版本（ver）白名单', () => {
     expect((fatal as ProtocolError).message).toContain('3');
   });
 
-  it('真传输：服务端回未知版本（3）→ 会话失败，错误文本指明非法版本（不静默吞因）', async () => {
+  it('真传输：服务端回 ver=3 回执 → 会话拒（白名单 {1,2}），错误文本指明非法版本', async () => {
     const h = makeBattleFactory((srv) => {
       srv.onRequest((req, s) => {
-        // 入局回 ver=1；发帧回未知的 ver=3（模拟对端不按协商版本回显）
+        // 入局回 ver=1；发帧回 ver=3（模拟对端不按协商版本回显）。
+        // 帧层白名单已扩到 ver=3（下行增量广播），故这里由**会话级**回执白名单拦下：
+        // ver=3 只用于推送，回执必须回显请求版本 {1,2}。
         s.replyOK(jsonBytes({ currentFrame: '3' }), req.op === STUB_OP_INPUT ? 3 : VERSION);
       });
     });
     const s = await open(h.factory);
     const err = await sendFrameInput(s, 'b-9', 1).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(ProtocolError);
-    // 帧层在会话之前先拒未知版本：原因文本必须透传到对外错误（不许只报「帧协议非法」）
-    expect((err as ProtocolError).message).toContain('invalid version: 3');
+    // 原因文本必须透传到对外错误（不许只报「帧协议非法」），且点名版本号 3。
+    expect((err as ProtocolError).message).toContain('载荷编码白名单');
+    expect((err as ProtocolError).message).toContain('3');
     await s.close();
   });
 });

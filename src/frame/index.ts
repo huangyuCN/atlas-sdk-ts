@@ -11,8 +11,10 @@ export {
   MAX_REQUEST_ID_LEN,
   MAX_SESSION_LEN,
   MsgType,
+  PAYLOAD_VERSIONS,
   VERSION,
   VERSION_2,
+  VERSION_3,
 } from './constants.js';
 export type { Header, Versioned } from './constants.js';
 export { ProtocolError } from './protocolError.js';

@@ -32,9 +32,11 @@ import {
   type BattleSessionState,
   type Settings,
 } from './contract.js';
+import { OP_REQUEST_FRAME_KEYFRAME } from './opkeys.js';
 import { EdgeTransport, type DirectPlan } from './plan.js';
 import { BattleHeartbeat } from './heartbeat.js';
 import { BattleEnding } from './ending.js';
+import { DownlinkDecoder, encodeKeyframeRequest } from '../downlink/index.js';
 import { BattleInbound } from './inbound.js';
 import { PendingTable } from './pending.js';
 import { BattleStats, type BattleSessionStats } from './stats.js';
@@ -141,6 +143,7 @@ class DirectBattleSession implements BattleSession {
       onHeartbeatRejected: (status) => this.terminal.onHeartbeatRejected(status),
       onTerminalReject: (status) => this.terminal.reject(status),
       absorbEnd: (payload) => this.ending.absorb(payload),
+      downlink: new DownlinkDecoder((lastSeq) => this.sendKeyframeRequest(lastSeq)),
       onFrame: this.settings.onFrame,
       onBattleEnd: this.settings.onBattleEnd,
       onPush: this.settings.onPush,
@@ -415,6 +418,28 @@ class DirectBattleSession implements BattleSession {
       length: body.length,
     };
     await tr.writeFrame(header, body, this.settings.maxBodySize);
+  }
+
+  /** sendKeyframeRequest 发一次关键帧请求（ver=3 失步的快速修复）：Tell 语义、不带幂等键、
+   *  不登记 pending（回执由服务端下一 tick 的全量帧代替）；失败只作罢（周期关键帧兜底），
+   *  绝不因一条恢复请求失败而终止会话。载荷按会话载荷编码版本构造（见 downlink/request）。 */
+  private sendKeyframeRequest(lastSeq: number): void {
+    const tr = this.transport;
+    if (tr === null || this.closing || this.restoring || this.terminal.isFatal() || this.ending.isEnded()) return;
+    if (this.current !== 'connected') return;
+    const payload = encodeKeyframeRequest(this.battleId, lastSeq, this.ver);
+    const body = buildRequestBodyFull(OP_REQUEST_FRAME_KEYFRAME, this.slot, '', payload);
+    const header: Header = {
+      magic: MAGIC,
+      version: this.ver,
+      type: MsgType.Request,
+      flags: FLAG_SESSION,
+      seq: ++this.seq,
+      length: body.length,
+    };
+    void tr.writeFrame(header, body, this.settings.maxBodySize).catch(() => {
+      // 恢复请求是尽力而为：连接失效由读循环/重连统一处理，不在这里二次报错。
+    });
   }
 
   /** trackHeartbeat 登记在途心跳 seq（有界：只留最近 HEARTBEAT_TRACK 拍）。

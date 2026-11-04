@@ -15,6 +15,7 @@ import {
   MSG_TYPE_REQUEST,
   MSG_TYPE_RESPONSE,
   VERSION2,
+  VERSION3,
 } from './gen/consts.js';
 
 export {
@@ -32,6 +33,13 @@ export {
  * 历史导出名 VERSION_2——SDK 内引用符号不变）。可选增强：服务端支持 ver=2 前
  * 勿在真实连接启用（protojson ver=1 永续支持）。 */
 export const VERSION_2 = VERSION2;
+
+/** 载荷编码 ver=3（下行增量广播：wire 仍是 protobuf 二进制，语义为基于 base_seq 的
+ * 稀疏增量；只用于服务端 → 客户端下行）。帧头白名单必须接受它，否则合法增量帧会被
+ * 当协议错误断开连接（2026-11-04 实测：unexpected EOF 16,233 次）。 */
+export const VERSION_3 = VERSION3;
+
+export { PAYLOAD_VERSIONS } from './gen/consts.js';
 
 /** 帧 flags 位图 bit1：请求帧 body 携带请求幂等键段（生成物名为 FLAG_REQUEST_I_D，
  * 本包沿用历史导出名 FLAG_REQUEST_ID——SDK 内引用符号不变）。 */

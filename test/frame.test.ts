@@ -8,6 +8,7 @@ import {
   ProtocolError,
   VERSION,
   VERSION_2,
+  VERSION_3,
   checkHeader,
   decodeFrame,
   encodeFrame,
@@ -178,12 +179,13 @@ describe('readFrameFrom（流式语义，Go frame.Read 同构三态）', () => {
 });
 
 describe('版本白名单（载荷编码协商，规范 §3.1）', () => {
-  it('ver=1/ver=2 合法，未知版本拒绝（对齐 Go TestCheckVersionWhitelist）', () => {
+  it('ver=1/ver=2/ver=3 合法，未知版本拒绝（对齐 Go 生成物 CheckHeader 白名单）', () => {
     const cases: Array<{ ver: number; valid: boolean }> = [
       { ver: VERSION, valid: true }, // ver=1 protojson
       { ver: VERSION_2, valid: true }, // ver=2 protobuf 二进制
-      { ver: 0, valid: false }, // 未知
-      { ver: 3, valid: false }, // 前向保留：未知版本即协议非法
+      { ver: VERSION_3, valid: true }, // ver=3 下行增量广播（白名单已扩，见白名单对账用例）
+      { ver: 0, valid: false }, // 未标注的历史形态，头校验层仍拒
+      { ver: 4, valid: false }, // 未定义的未来版本：不得放太宽
       { ver: 99, valid: false },
     ];
     for (const tc of cases) {

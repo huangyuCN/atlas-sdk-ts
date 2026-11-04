@@ -15,8 +15,8 @@ import {
 	MSG_TYPE_NOTIFY,
 	MSG_TYPE_REQUEST,
 	MSG_TYPE_RESPONSE,
+	PAYLOAD_VERSIONS,
 	VERSION,
-	VERSION2,
 } from './consts.js';
 
 /** 帧头固定布局：magic(4) | version(1) | type(1) | flags(1) | pad(1) | seq(4) | length(4)（大端）。 */
@@ -72,6 +72,13 @@ export function normalizeMaxBodySize(maxBodySize = 0): number {
   return maxBodySize > 0 ? maxBodySize : MAX_BODY_SIZE;
 }
 
+/** isPayloadVersion 判定帧头 version 位是否在解码器接受的白名单内。
+ * 白名单是生成物 PAYLOAD_VERSIONS（源自 transport/frame.PayloadVersions），
+ * 此处不再写死 ver=1/2 之类的字面量——否则「能声明」与「能解」会各自漂移。 */
+export function isPayloadVersion(ver: number): boolean {
+  return PAYLOAD_VERSIONS.includes(ver);
+}
+
 /** checkHeader 校验帧头合法性：magic / seq≠0 / type 白名单 / version 白名单 / flags 保留位 / 长度上限；
  * 校验失败抛 FrameCodecError（kind = 'protocol'）。 */
 export function checkHeader(h: Header, maxBodySize = 0): void {
@@ -84,7 +91,7 @@ export function checkHeader(h: Header, maxBodySize = 0): void {
   if (h.type !== MSG_TYPE_REQUEST && h.type !== MSG_TYPE_RESPONSE && h.type !== MSG_TYPE_NOTIFY) {
     throw new FrameCodecError('protocol', 'frame: invalid type: ' + h.type);
   }
-  if (h.version !== VERSION && h.version !== VERSION2) {
+  if (!isPayloadVersion(h.version)) {
     throw new FrameCodecError('protocol', 'frame: invalid version: ' + h.version);
   }
   if (((h.flags ?? 0) & reservedFlags) !== 0) {

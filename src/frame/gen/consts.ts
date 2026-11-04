@@ -10,6 +10,8 @@ export const MAGIC = 0x41544C53;
 export const VERSION = 1;
 /** Version2 载荷编码 ver=2（protobuf 二进制） */
 export const VERSION2 = 2;
+/** Version3 载荷编码 ver=3（下行增量广播） */
+export const VERSION3 = 3;
 /** MaxBodySize 单帧 body 绝对上限（2MiB） */
 export const MAX_BODY_SIZE = 2097152;
 /** MaxOperationLen operation 名长度上限（4096 字节） */
@@ -28,3 +30,6 @@ export const MSG_TYPE_NOTIFY = 3;
 export const FLAG_SESSION = 1;
 /** FlagRequestID body 携带请求幂等键 */
 export const FLAG_REQUEST_I_D = 2;
+
+/** PayloadVersions 解码器接受的帧头载荷版本全集（升序；由 transport/frame 派生，勿手改）。 */
+export const PAYLOAD_VERSIONS: readonly number[] = [1, 2, 3];
